@@ -1,0 +1,83 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # запускается при git tag v1.0.0 && git push --tags
+
+permissions:
+  contents: write   # нужно для создания релиза
+
+jobs:
+  # ── Windows EXE ─────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Установка зависимостей
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Сборка EXE
+        run: python build_win.py
+
+      - name: Запаковать в zip
+        run: Compress-Archive -Path dist/OverLex -DestinationPath dist/OverLex-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/OverLex-Windows.zip
+
+  # ── macOS DMG ───────────────────────────────────────────────────────────────
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Установка зависимостей
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Сборка DMG
+        run: bash build_mac.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: dist/OverLex.dmg
+
+  # ── GitHub Release ───────────────────────────────────────────────────────────
+  release:
+    needs: [build-windows, build-mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Создать релиз
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "OverLex ${{ github.ref_name }}"
+          body: |
+            ## OverLex ${{ github.ref_name }}
+            Ctrl + Middle Click — мгновенный перевод слова EN→RU прямо на экране.
+
+            ### Скачать
+            | Платформа | Файл |
+            |---|---|
+            | Windows 10/11 | `OverLex-Windows.zip` → распакуй, запусти `OverLex.exe` |
+            | macOS 12+ | `OverLex.dmg` → открой, перетащи в Applications |
+          files: |
+            artifacts/windows/OverLex-Windows.zip
+            artifacts/mac/OverLex.dmg
+          draft: false
+          prerelease: false
