@@ -1,0 +1,9 @@
+.venv*/
+venv/
+__pycache__/
+build/
+dist/
+*.log
+*.spec
+_ocr_helper_bin
+_ocr_helper.ps1
