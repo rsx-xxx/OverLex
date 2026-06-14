@@ -45,22 +45,27 @@ param([string]$imgPath)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.BitmapDecoder,Windows.Foundation,ContentType=WindowsRuntime]
-$null=[Windows.Storage.Streams.InMemoryRandomAccessStream,Windows.Foundation,ContentType=WindowsRuntime]
-function Await($t){$t.GetAwaiter().GetResult()}
-$bytes=[System.IO.File]::ReadAllBytes($imgPath)
-$stream=[Windows.Storage.Streams.InMemoryRandomAccessStream]::new()
-$writer=[Windows.Storage.Streams.DataWriter]::new($stream)
-$writer.WriteBytes($bytes)
-Await($writer.StoreAsync())|Out-Null
-$stream.Seek(0)
-$dec=Await([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream))
-$bmp=Await($dec.GetSoftwareBitmapAsync())
-$eng=[Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-$res=Await($eng.RecognizeAsync($bmp))
-foreach($line in $res.Lines){foreach($word in $line.Words){
-    $r=$word.BoundingRect
-    Write-Output "$($r.X)|$($r.Y)|$($r.Width)|$($r.Height)|$($word.Text)"
-}}
+$null=[Windows.Storage.StorageFile,Windows.Foundation,ContentType=WindowsRuntime]
+
+function Await($task) {
+    $t = $task.AsTask()
+    $t.Wait()
+    $t.Result
+}
+
+$file    = Await([Windows.Storage.StorageFile]::GetFileFromPathAsync($imgPath))
+$stream  = Await($file.OpenReadAsync())
+$decoder = Await([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream))
+$bitmap  = Await($decoder.GetSoftwareBitmapAsync())
+$engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+$result  = Await($engine.RecognizeAsync($bitmap))
+
+foreach ($line in $result.Lines) {
+    foreach ($word in $line.Words) {
+        $r = $word.BoundingRect
+        Write-Output "$($r.X)|$($r.Y)|$($r.Width)|$($r.Height)|$($word.Text)"
+    }
+}
 """, encoding="utf-8")
 
     def _ocr(img: Image.Image):
