@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-OverLex — Screen Translation Overlay
-Ctrl + Middle Click -> instant EN->RU word translation overlay.
-Windows: OCR via PowerShell / Windows.Media.Ocr
-macOS:   OCR via Swift / Vision.framework
+OverLex - Screen Translation Overlay
+Ctrl + Middle Click -> instant EN->RU word translation.
+Windows: PowerShell / Windows.Media.Ocr
+macOS:   Swift / Vision.framework
 """
 import os, sys, re, threading, signal, io, platform, tempfile
 from pathlib import Path
 from collections import OrderedDict
+import urllib.request, urllib.parse, json as _json
 
 import mss
-import urllib.request, urllib.parse, json as _json
 from PIL import Image, ImageEnhance
 from pynput import mouse as pmouse, keyboard as pkeyboard
 
@@ -31,26 +31,21 @@ SRC, DST   = "en", "ru"
 HIT_PAD    = 20
 CACHE_MAX  = 500
 APP_NAME   = "OverLex"
-
 _TR_URL    = "https://translate.googleapis.com/translate_a/single"
 
 # == OCR ======================================================================
 
-if _IS_WIN:
-    import subprocess
-
-    _PS_SCRIPT = _exe_dir / "_ocr_helper.ps1"
-    _PS_SCRIPT.write_text("""\
+_PS_BODY = r"""
 param([string]$imgPath)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.BitmapDecoder,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Storage.StorageFile,Windows.Foundation,ContentType=WindowsRuntime]
 
-function Await($task) {
-    $t = $task.AsTask()
-    $t.Wait()
-    $t.Result
+function Await($op) {
+    while ($op.Status -eq 0) { [System.Threading.Thread]::Sleep(5) }
+    if ($op.Status -eq 3) { throw "WinRT error: $($op.ErrorCode)" }
+    $op.GetResults()
 }
 
 $file    = Await([Windows.Storage.StorageFile]::GetFileFromPathAsync($imgPath))
@@ -66,15 +61,41 @@ foreach ($line in $result.Lines) {
         Write-Output "$($r.X)|$($r.Y)|$($r.Width)|$($r.Height)|$($word.Text)"
     }
 }
-""", encoding="utf-8")
+"""
+
+_SWIFT_BODY = """
+import Vision, AppKit, Foundation
+let path = CommandLine.arguments[1]
+guard let img = NSImage(contentsOfFile: path),
+      let cg  = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { exit(1) }
+let req = VNRecognizeTextRequest()
+req.recognitionLevel = .accurate
+try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
+for obs in (req.results ?? []) {
+    guard let top = obs.topCandidates(1).first else { continue }
+    let b = obs.boundingBox
+    let x = b.origin.x * Double(cg.width)
+    let y = (1 - b.origin.y - b.size.height) * Double(cg.height)
+    let w = b.size.width  * Double(cg.width)
+    let h = b.size.height * Double(cg.height)
+    print("\\(x)|\\(y)|\\(w)|\\(h)|\\(top.string)")
+}
+"""
+
+if _IS_WIN:
+    import subprocess
+    _PS_SCRIPT = _exe_dir / "_ocr_helper.ps1"
+    _PS_SCRIPT.write_text(_PS_BODY, encoding="utf-8")
 
     def _ocr(img: Image.Image):
         with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as f:
             img.save(f.name, "BMP"); tmp = f.name
         try:
+            # StorageFile requires absolute path
+            abs_tmp = str(Path(tmp).resolve())
             r = subprocess.run(
-                ["powershell","-NonInteractive","-NoProfile",
-                 "-ExecutionPolicy","Bypass","-File",str(_PS_SCRIPT),tmp],
+                ["powershell", "-NonInteractive", "-NoProfile",
+                 "-ExecutionPolicy", "Bypass", "-File", str(_PS_SCRIPT), abs_tmp],
                 capture_output=True, text=True, timeout=12)
             items = []
             for line in r.stdout.strip().splitlines():
@@ -93,28 +114,9 @@ foreach ($line in $result.Lines) {
 
 elif _IS_MAC:
     import subprocess
-
     _SWIFT_SRC = _exe_dir / "_ocr_helper.swift"
     _SWIFT_BIN = _exe_dir / "_ocr_helper_bin"
-    _SWIFT_SRC.write_text("""\
-import Vision, AppKit, Foundation
-let path = CommandLine.arguments[1]
-guard let img = NSImage(contentsOfFile: path),
-      let cg  = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { exit(1) }
-let req = VNRecognizeTextRequest()
-req.recognitionLevel = .accurate
-try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
-for obs in (req.results ?? []) {
-    guard let top = obs.topCandidates(1).first else { continue }
-    let b = obs.boundingBox
-    let x = b.origin.x * Double(cg.width)
-    let y = (1 - b.origin.y - b.size.height) * Double(cg.height)
-    let w = b.size.width  * Double(cg.width)
-    let h = b.size.height * Double(cg.height)
-    print("\\(x)|\\(y)|\\(w)|\\(h)|\\(top.string)")
-}
-""", encoding="utf-8")
-
+    _SWIFT_SRC.write_text(_SWIFT_BODY, encoding="utf-8")
     if not _SWIFT_BIN.exists():
         _log("[ocr] compiling swift helper...")
         subprocess.run(["swiftc", str(_SWIFT_SRC), "-o", str(_SWIFT_BIN)], check=True)
@@ -137,7 +139,6 @@ for obs in (req.results ?? []) {
         finally:
             try: os.unlink(tmp)
             except: pass
-
 else:
     raise RuntimeError(f"Unsupported platform: {platform.system()}")
 
@@ -156,15 +157,16 @@ class _Bus(QObject):
     hide_now = pyqtSignal()
 bus = _Bus()
 
+# == Translation ==============================================================
+
 _cache: OrderedDict = OrderedDict()
 def _tr(text):
     k = text.lower().strip()
     if k in _cache: _cache.move_to_end(k); return _cache[k]
     try:
         params = urllib.parse.urlencode({"client":"gtx","sl":SRC,"tl":DST,"dt":"t","q":text})
-        req = urllib.request.Request(
-            f"{_TR_URL}?{params}",
-            headers={"User-Agent":"Mozilla/5.0"})
+        req = urllib.request.Request(f"{_TR_URL}?{params}",
+                                     headers={"User-Agent":"Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=4) as resp:
             data = _json.loads(resp.read())
         result = "".join(s[0] for s in data[0] if s[0]) if data[0] else text
@@ -173,6 +175,8 @@ def _tr(text):
     _cache[k] = result
     if len(_cache) > CACHE_MAX: _cache.popitem(last=False)
     return result
+
+# == Input hooks ==============================================================
 
 _ctrl = False; _busy = False
 
@@ -193,6 +197,8 @@ def _mc(x, y, b, pressed):
             threading.Thread(target=_run, args=(x,y), daemon=True).start()
     elif b != pmouse.Button.middle:
         bus.hide_now.emit()
+
+# == OCR helpers ==============================================================
 
 def _rect(bbox):
     xs,ys = [float(p[0]) for p in bbox],[float(p[1]) for p in bbox]
@@ -215,6 +221,8 @@ def _word_at(text, bx, bw, rx):
         if d < bd: best,bd = w,d
         cx += ww
     return best
+
+# == Pipeline =================================================================
 
 def _run(x, y):
     global _busy
@@ -260,7 +268,7 @@ def _grab_focus(hwnd):
         u32.SetForegroundWindow(hwnd); u32.BringWindowToTop(hwnd)
     elif _IS_MAC:
         import subprocess
-        subprocess.Popen(["osascript","-e",
+        subprocess.Popen(["osascript", "-e",
             'tell app "System Events" to set frontmost of first process whose frontmost is true to false'])
 
 # == Icon =====================================================================
@@ -281,8 +289,8 @@ def _make_icon(size=64):
 
 OW=320; PAD_H=24; PAD_V=14; ABAR=3; R=12
 C_BG  = QColor(8,10,20,165)
-C_AT  = QColor(48,130,255); C_AB=QColor(110,65,250)
-C_TR  = QColor(230,240,255,255); C_BDR=QColor(255,255,255,18)
+C_AT  = QColor(48,130,255); C_AB = QColor(110,65,250)
+C_TR  = QColor(230,240,255,255); C_BDR = QColor(255,255,255,18)
 
 class Overlay(QWidget):
     def __init__(self):
@@ -338,7 +346,7 @@ class Overlay(QWidget):
         p.drawText(ABAR+PAD_H,0,W-ABAR-PAD_H*2,H,
                    Qt.AlignLeft|Qt.AlignVCenter|Qt.TextSingleLine,self._text)
         p.setClipping(False); p.setPen(C_BDR)
-        brd=QPainterPath(); brd.addRoundedRect(.5,.5,W-1,H-1,R,R)
+        brd=QPainterPath(); brd.addRoundedRect(.5,.5,W-1,W-1,R,R)
         p.drawPath(brd)
 
 # == Autostart ================================================================
@@ -364,7 +372,7 @@ def _autostart_set(enable: bool):
         plist = Path.home()/"Library"/"LaunchAgents"/"com.overlex.app.plist"
         if enable:
             parts = _autostart_val().split()
-            args  = "".join(f"<string>{p}</string>" for p in parts)
+            args = "".join(f"<string>{p}</string>" for p in parts)
             plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -395,16 +403,20 @@ class Tray(QSystemTrayIcon):
         super().__init__(icon); self._app=app; self._enabled=True
         self.setToolTip("OverLex — Ctrl+Middle Click")
         self._menu = QMenu()
+
         self._a_on = QAction("Active"); self._a_on.setCheckable(True)
         self._a_on.setChecked(True); self._a_on.triggered.connect(self._toggle)
         self._menu.addAction(self._a_on); self._menu.addSeparator()
+
         self._a_auto = QAction("Launch at login"); self._a_auto.setCheckable(True)
         self._a_auto.setChecked(_autostart_get())
         self._a_auto.triggered.connect(lambda c: _autostart_set(c))
         self._menu.addAction(self._a_auto); self._menu.addSeparator()
+
         self._a_quit = QAction("Quit")
         self._a_quit.triggered.connect(self._do_quit)
         self._menu.addAction(self._a_quit)
+
         self.setContextMenu(self._menu); self.show()
 
     def _toggle(self, on):
@@ -435,7 +447,7 @@ def main():
     ms = pmouse.Listener(on_click=_mc_guard)
     kb.daemon = ms.daemon = True; kb.start(); ms.start()
     _log("[main] listeners OK")
-    _tray_ref.showMessage("OverLex","Ctrl+Middle Click to translate.",
+    _tray_ref.showMessage("OverLex", "Ctrl+Middle Click to translate.",
                           QSystemTrayIcon.Information, 2000)
     sys.exit(app.exec_())
 
