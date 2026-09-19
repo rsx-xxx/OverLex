@@ -78,8 +78,9 @@ public static class OcrHelper {
 '@
     $csPath = Join-Path $env:TEMP "OverLexOcrHelper.cs"
     Set-Content -Path $csPath -Value $csSource -Encoding UTF8
-    $refs = @($mscorlibDll, $systemRuntimeDll, $wrRuntimeDll, "$winmdDir\Windows.Foundation.winmd", "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
-    $cscOut = & $csc /nologo /target:library "/out:$dllPath" "/reference:$refs" $csPath 2>&1
+    $refs = @($mscorlibDll, $systemRuntimeDll, $wrRuntimeDll) -join ";"
+    $winmdRefs = @("$winmdDir\Windows.Foundation.winmd", "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
+    $cscOut = & $csc /nologo /target:library "/out:$dllPath" "/reference:$refs" "/link:$winmdRefs" $csPath 2>&1
     if ($LASTEXITCODE -ne 0) { throw "csc.exe failed: $cscOut" }
 }
 Add-Type -Path $dllPath
