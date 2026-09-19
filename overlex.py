@@ -38,22 +38,23 @@ _TR_URL    = "https://translate.googleapis.com/translate_a/single"
 _PS_BODY = r"""
 param([string]$imgPath)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
+Add-Type -AssemblyName System.Drawing
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
-$null=[Windows.Graphics.Imaging.BitmapDecoder,Windows.Foundation,ContentType=WindowsRuntime]
-$null=[Windows.Storage.StorageFile,Windows.Foundation,ContentType=WindowsRuntime]
-$null=[Windows.Storage.Streams.IRandomAccessStream,Windows.Storage.Streams,ContentType=WindowsRuntime]
+$null=[Windows.Graphics.Imaging.SoftwareBitmap,Windows.Foundation,ContentType=WindowsRuntime]
+$null=[Windows.Security.Cryptography.CryptographicBuffer,Windows.Security.Cryptography,ContentType=WindowsRuntime]
 
 # IAsyncOperation<T>.GetResults() isn't directly callable through PowerShell's COM
 # dispatch (generic WinRT interface method); convert to a real .NET Task via the
-# generic AsTask<T> extension method instead, found by reflection.
+# generic AsTask<T> extension method instead, found by reflection. Only needed for
+# RecognizeAsync below - image decoding uses plain GDI+ instead of WinRT's
+# StorageFile/BitmapDecoder/IRandomAccessStream pipeline, because PowerShell's
+# dynamic COM dispatch can't reliably marshal a generic WinRT interface that's
+# itself parameterized by another interface (IAsyncOperation<IRandomAccessStream>).
 $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
     $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
 })[0]
 
 function Await($WinRtTask, $ResultType) {
-    # Reflection's Invoke() does strict parameter-type checking and won't perform the
-    # implicit COM interface QI a compiled call would; cast to the closed generic
-    # IAsyncOperation<T> interface explicitly first.
     $asyncInterface = [Windows.Foundation.IAsyncOperation`1].MakeGenericType($ResultType)
     $castedTask = $WinRtTask -as $asyncInterface
     $task = $asTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($castedTask))
@@ -61,10 +62,20 @@ function Await($WinRtTask, $ResultType) {
     $task.Result
 }
 
-$file    = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($imgPath)) ([Windows.Storage.StorageFile])
-$stream  = Await ($file.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStream])
-$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-$bitmap  = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$src = [System.Drawing.Bitmap]::FromFile($imgPath)
+$w = $src.Width
+$h = $src.Height
+$rect = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
+$bmpData = $src.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$bytes = New-Object byte[] ($bmpData.Stride * $h)
+[System.Runtime.InteropServices.Marshal]::Copy($bmpData.Scan0, $bytes, 0, $bytes.Length)
+$src.UnlockBits($bmpData)
+$src.Dispose()
+
+$buffer = [Windows.Security.Cryptography.CryptographicBuffer]::CreateFromByteArray($bytes)
+$bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer(
+    $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, $w, $h, [Windows.Graphics.Imaging.BitmapAlphaMode]::Ignore)
+
 $engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if (-not $engine) { throw "No OCR engine available for the current user profile languages" }
 $result  = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
