@@ -95,13 +95,17 @@ if _IS_WIN:
 
 elif _IS_MAC:
     import subprocess
-    _SWIFT_BIN = _exe_dir / "_ocr_helper_bin"
-    if not _SWIFT_BIN.exists():
-        # Packaged builds bundle a precompiled _ocr_helper_bin (see build_mac.sh) so end
-        # users never need Xcode installed; this compile path is for running from source.
-        _SWIFT_SRC = Path(__file__).resolve().parent / "macos_ocr_helper.swift"
-        _log("[ocr] compiling swift helper...")
-        subprocess.run(["swiftc", str(_SWIFT_SRC), "-O", "-o", str(_SWIFT_BIN)], check=True)
+    if getattr(sys, "frozen", False):
+        # PyInstaller's onedir macOS layout puts bundled binaries under Contents/Frameworks
+        # (sys._MEIPASS), not next to the executable in Contents/MacOS (sys.executable).
+        # build_mac.sh bundles a precompiled _ocr_helper_bin there so end users never need Xcode.
+        _SWIFT_BIN = Path(sys._MEIPASS) / "_ocr_helper_bin"
+    else:
+        _SWIFT_BIN = _exe_dir / "_ocr_helper_bin"
+        if not _SWIFT_BIN.exists():
+            _SWIFT_SRC = Path(__file__).resolve().parent / "macos_ocr_helper.swift"
+            _log("[ocr] compiling swift helper...")
+            subprocess.run(["swiftc", str(_SWIFT_SRC), "-O", "-o", str(_SWIFT_BIN)], check=True)
 
     def _ocr(img: Image.Image):
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:

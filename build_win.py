@@ -21,7 +21,7 @@ EXCLUDE = [
     "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets",
     "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtCharts",
 ]
-COLLECT = ["PIL", "mss", "pynput", "PySide6"]
+COLLECT = ["PIL", "mss", "pynput"]
 HIDDEN = [
     "pynput.keyboard._win32", "pynput.mouse._win32",
     "pynput.keyboard._base", "pynput.mouse._base", "winreg",

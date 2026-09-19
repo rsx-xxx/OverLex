@@ -83,7 +83,7 @@ OVERLEX_VERSION="${OVERLEX_VERSION#v}"
 "$PYTHON_BIN" -m PyInstaller --onedir --noconsole --name OverLex --noconfirm \
   --icon build/icon.icns \
   --collect-all PIL --collect-all mss \
-  --collect-all pynput --collect-all PySide6 \
+  --collect-all pynput \
   --add-binary "build/_ocr_helper_bin:." \
   --hidden-import pynput.keyboard._darwin \
   --hidden-import pynput.mouse._darwin \
