@@ -78,9 +78,14 @@ public static class OcrHelper {
 '@
     $csPath = Join-Path $env:TEMP "OverLexOcrHelper.cs"
     Set-Content -Path $csPath -Value $csSource -Encoding UTF8
-    $refs = @($mscorlibDll, $systemRuntimeDll, $wrRuntimeDll) -join ";"
-    $winmdRefs = @("$winmdDir\Windows.Foundation.winmd", "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
-    $cscOut = & $csc /nologo /target:library "/out:$dllPath" "/reference:$refs" "/link:$winmdRefs" $csPath 2>&1
+    # Windows.Foundation types (IAsyncOperation<T> etc.) are natively projected by the
+    # CLR itself and already what System.Runtime.WindowsRuntime.dll's AsTask<T> binds
+    # against - referencing Windows.Foundation.winmd separately creates a second,
+    # non-identical definition of the same interface, which is why AsTask<T> couldn't
+    # match it despite resolving fine on its own. Only reference the winmd files for
+    # namespaces that actually need their own metadata.
+    $refs = @($mscorlibDll, $systemRuntimeDll, $wrRuntimeDll, "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
+    $cscOut = & $csc /nologo /target:library "/out:$dllPath" "/reference:$refs" $csPath 2>&1
     if ($LASTEXITCODE -ne 0) { throw "csc.exe failed: $cscOut" }
 }
 Add-Type -Path $dllPath
