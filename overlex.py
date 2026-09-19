@@ -74,7 +74,7 @@ $src.Dispose()
 
 $buffer = [Windows.Security.Cryptography.CryptographicBuffer]::CreateFromByteArray($bytes)
 $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer(
-    $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, $w, $h, [Windows.Graphics.Imaging.BitmapAlphaMode]::Ignore)
+    $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, $w, $h)
 
 $engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if (-not $engine) { throw "No OCR engine available for the current user profile languages" }
