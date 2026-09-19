@@ -40,38 +40,25 @@ param([string]$imgPath)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -AssemblyName System.Drawing
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
-$null=[Windows.Media.Ocr.OcrResult,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.SoftwareBitmap,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Storage.Streams.IBuffer,Windows.Foundation,ContentType=WindowsRuntime]
 
-# IAsyncOperation<T>.GetResults() isn't directly callable through PowerShell's COM
-# dispatch (generic WinRT interface method); convert to a real .NET Task via the
-# generic AsTask<T> extension method instead, found by reflection. Only needed for
-# RecognizeAsync below - image decoding uses plain GDI+ instead of WinRT's
-# StorageFile/BitmapDecoder/IRandomAccessStream pipeline, because PowerShell's
-# dynamic COM dispatch can't reliably marshal a generic WinRT interface that's
-# itself parameterized by another interface (IAsyncOperation<IRandomAccessStream>).
-$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
-})[0]
-
-function Await($WinRtTask, $ResultType) {
-    # The -as operator silently returns null here instead of casting: it works for a
-    # WinRT static method's return value (already strongly typed) but not for an
-    # instance method's return value (a plain untyped __ComObject). Force the
-    # QueryInterface directly via Marshal instead, which doesn't rely on PowerShell's
-    # type-inference heuristics.
-    $asyncInterface = [Windows.Foundation.IAsyncOperation`1].MakeGenericType($ResultType)
-    $ptr = [System.Runtime.InteropServices.Marshal]::GetIUnknownForObject($WinRtTask)
-    try {
-        $castedTask = [System.Runtime.InteropServices.Marshal]::GetTypedObjectForIUnknown($ptr, $asyncInterface)
-    } finally {
-        [System.Runtime.InteropServices.Marshal]::Release($ptr) | Out-Null
+# IAsyncOperation<T>.GetResults() isn't reliably callable through PowerShell's own
+# dynamic COM dispatch for a WinRT object returned by an instance method (only works
+# when the object comes straight from a static method call, which is already
+# strongly typed). C#'s `dynamic` keyword uses the DLR runtime binder instead, which
+# has real support for late-bound WinRT/IInspectable dispatch including generic
+# interface members - so do the wait/GetResults() there instead of in PowerShell.
+Add-Type -ReferencedAssemblies Microsoft.CSharp,System.Core -Language CSharp -TypeDefinition @"
+using System.Threading;
+public static class WinRtAwait {
+    public static object GetResult(dynamic asyncOp) {
+        while ((int)asyncOp.Status == 0) { Thread.Sleep(5); }
+        if ((int)asyncOp.Status == 3) { throw new System.Exception("WinRT error: " + asyncOp.ErrorCode); }
+        return asyncOp.GetResults();
     }
-    $task = $asTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($castedTask))
-    $task.Wait(-1) | Out-Null
-    $task.Result
 }
+"@
 
 $src = [System.Drawing.Bitmap]::FromFile($imgPath)
 $w = $src.Width
@@ -89,7 +76,7 @@ $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer(
 
 $engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if (-not $engine) { throw "No OCR engine available for the current user profile languages" }
-$result  = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+$result  = [WinRtAwait]::GetResult($engine.RecognizeAsync($bitmap))
 
 foreach ($line in $result.Lines) {
     foreach ($word in $line.Words) {
