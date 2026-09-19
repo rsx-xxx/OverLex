@@ -50,41 +50,37 @@ $null=[Windows.Storage.Streams.IBuffer,Windows.Foundation,ContentType=WindowsRun
 # assemblies). So compile with the real Roslyn csc.exe directly - which does support
 # .winmd references, same as any classic desktop project calling WinRT APIs - and
 # load the resulting DLL, which carries proper static typing throughout.
-function Resolve-RefAssembly($simpleName) {
-    $loaded = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq $simpleName } | Select-Object -First 1
-    if ($loaded) { return $loaded.Location }
-    return ([System.Reflection.Assembly]::Load($simpleName)).Location
-}
 $winmdDir = "$env:WINDIR\System32\WinMetadata"
 $mscorlibDll = ([object].Assembly.Location)
-$systemRuntimeDll = Resolve-RefAssembly "System.Runtime"
-$wrRuntimeDll = Resolve-RefAssembly "System.Runtime.WindowsRuntime"
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if (-not (Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
 
 $dllPath = Join-Path $env:TEMP "OverLexOcrHelper.dll"
 if (-not (Test-Path $dllPath)) {
+    # Poll Status/GetResults directly instead of using AsTask<T>: AsTask comes from
+    # System.Runtime.WindowsRuntime.dll, which carries its own embedded definition of
+    # Windows.Foundation.IAsyncOperation<T> that doesn't type-match the one resolved
+    # from our own explicit Windows.Foundation.winmd reference (needed transitively by
+    # Windows.Media.winmd/Windows.Graphics.winmd) - "no extension method found" despite
+    # the interface itself resolving fine. Avoiding AsTask avoids that whole conflict.
     $csSource = @'
-using System.Runtime.InteropServices.WindowsRuntime;
+using Windows.Foundation;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 public static class OcrHelper {
     public static OcrResult Recognize(SoftwareBitmap bitmap) {
         var engine = OcrEngine.TryCreateFromUserProfileLanguages();
         if (engine == null) throw new System.Exception("No OCR engine available for the current user profile languages");
-        return engine.RecognizeAsync(bitmap).AsTask().GetAwaiter().GetResult();
+        var op = engine.RecognizeAsync(bitmap);
+        while (op.Status == AsyncStatus.Started) { System.Threading.Thread.Sleep(5); }
+        if (op.Status == AsyncStatus.Error) { throw new System.Exception("OCR failed: " + op.ErrorCode); }
+        return op.GetResults();
     }
 }
 '@
     $csPath = Join-Path $env:TEMP "OverLexOcrHelper.cs"
     Set-Content -Path $csPath -Value $csSource -Encoding UTF8
-    # Windows.Foundation types (IAsyncOperation<T> etc.) are natively projected by the
-    # CLR itself and already what System.Runtime.WindowsRuntime.dll's AsTask<T> binds
-    # against - referencing Windows.Foundation.winmd separately creates a second,
-    # non-identical definition of the same interface, which is why AsTask<T> couldn't
-    # match it despite resolving fine on its own. Only reference the winmd files for
-    # namespaces that actually need their own metadata.
-    $refs = @($mscorlibDll, $systemRuntimeDll, $wrRuntimeDll, "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
+    $refs = @($mscorlibDll, "$winmdDir\Windows.Foundation.winmd", "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
     $cscOut = & $csc /nologo /target:library "/out:$dllPath" "/reference:$refs" $csPath 2>&1
     if ($LASTEXITCODE -ne 0) { throw "csc.exe failed: $cscOut" }
 }
