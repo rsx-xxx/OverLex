@@ -51,7 +51,12 @@ $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-O
 })[0]
 
 function Await($WinRtTask, $ResultType) {
-    $task = $asTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($WinRtTask))
+    # Reflection's Invoke() does strict parameter-type checking and won't perform the
+    # implicit COM interface QI a compiled call would; cast to the closed generic
+    # IAsyncOperation<T> interface explicitly first.
+    $asyncInterface = [Windows.Foundation.IAsyncOperation`1].MakeGenericType($ResultType)
+    $castedTask = $WinRtTask -as $asyncInterface
+    $task = $asTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($castedTask))
     $task.Wait(-1) | Out-Null
     $task.Result
 }
