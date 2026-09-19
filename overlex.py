@@ -50,8 +50,14 @@ $null=[Windows.Storage.Streams.IBuffer,Windows.Foundation,ContentType=WindowsRun
 # assemblies). So compile with the real Roslyn csc.exe directly - which does support
 # .winmd references, same as any classic desktop project calling WinRT APIs - and
 # load the resulting DLL, which carries proper static typing throughout.
+function Resolve-RefAssembly($simpleName) {
+    $loaded = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq $simpleName } | Select-Object -First 1
+    if ($loaded) { return $loaded.Location }
+    return ([System.Reflection.Assembly]::Load($simpleName)).Location
+}
 $winmdDir = "$env:WINDIR\System32\WinMetadata"
 $mscorlibDll = ([object].Assembly.Location)
+$systemRuntimeDll = Resolve-RefAssembly "System.Runtime"
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if (-not (Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
 
@@ -80,7 +86,7 @@ public static class OcrHelper {
 '@
     $csPath = Join-Path $env:TEMP "OverLexOcrHelper.cs"
     Set-Content -Path $csPath -Value $csSource -Encoding UTF8
-    $refs = @($mscorlibDll, "$winmdDir\Windows.Foundation.winmd", "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
+    $refs = @($mscorlibDll, $systemRuntimeDll, "$winmdDir\Windows.Foundation.winmd", "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
     $cscOut = & $csc /nologo /target:library "/out:$dllPath" "/reference:$refs" $csPath 2>&1
     if ($LASTEXITCODE -ne 0) { throw "csc.exe failed: $cscOut" }
 }
