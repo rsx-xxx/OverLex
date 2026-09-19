@@ -82,7 +82,7 @@ jobs:
         run: cat artifacts/windows/*.sha256 artifacts/mac/*.sha256 > artifacts/SHA256SUMS.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "OverLex ${{ github.ref_name }}"
           body: |
