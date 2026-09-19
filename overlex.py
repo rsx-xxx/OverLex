@@ -41,7 +41,6 @@ Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -AssemblyName System.Drawing
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.SoftwareBitmap,Windows.Foundation,ContentType=WindowsRuntime]
-$null=[Windows.Security.Cryptography.CryptographicBuffer,Windows.Security.Cryptography,ContentType=WindowsRuntime]
 $null=[Windows.Storage.Streams.IBuffer,Windows.Foundation,ContentType=WindowsRuntime]
 
 # IAsyncOperation<T>.GetResults() isn't directly callable through PowerShell's COM
@@ -73,8 +72,7 @@ $bytes = New-Object byte[] ($bmpData.Stride * $h)
 $src.UnlockBits($bmpData)
 $src.Dispose()
 
-$rawBuffer = [Windows.Security.Cryptography.CryptographicBuffer]::CreateFromByteArray($bytes)
-$buffer = $rawBuffer -as [Windows.Storage.Streams.IBuffer]
+$buffer = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]::AsBuffer($bytes)
 $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer(
     $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [uint32]$w, [uint32]$h)
 
