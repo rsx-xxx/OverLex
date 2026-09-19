@@ -73,11 +73,23 @@ jobs:
             dist/OverLex.dmg.sha256
 
   # ── GitHub Release ───────────────────────────────────────────────────────────
+  # Tag pushes (v*) get their own versioned release. Everything else (main pushes,
+  # manual runs) updates a rolling 'latest' release so a build is always downloadable
+  # from /releases/latest without cutting a version tag.
   release:
     needs: [build-windows, build-mac]
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
+      - name: Move rolling 'latest' tag to this commit
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f latest
+          git push origin -f latest
+
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
@@ -86,13 +98,14 @@ jobs:
         run: cat artifacts/windows/*.sha256 artifacts/mac/*.sha256 > artifacts/SHA256SUMS.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          name: "OverLex ${{ github.ref_name }}"
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('OverLex {0}', github.ref_name) || 'OverLex (latest main build)' }}
           body: |
-            # OverLex ${{ github.ref_name }}
+            # ${{ startsWith(github.ref, 'refs/tags/') && format('OverLex {0}', github.ref_name) || 'OverLex — latest main build' }}
 
-            Screen translation overlay for Windows and macOS.
+            ${{ startsWith(github.ref, 'refs/tags/') && 'Tagged release.' || format('Automatically built from commit {0} on main.', github.sha) }}
 
             ## Download
             | Platform | File |

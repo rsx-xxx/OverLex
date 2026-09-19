@@ -13,9 +13,9 @@ Works over games, browsers, any application.
 
 Each release also publishes `SHA256SUMS.txt` — verify a downloaded file against it before running.
 
-Want a build without cutting a version tag? Every push to `main` (and manual runs via
-**Actions → Build & Release → Run workflow**) also builds the EXE/DMG — grab them from that run's
-**Artifacts** section at the bottom of the Actions run page.
+The `latest` release above tracks the most recent commit on `main` (rebuilt on every push, or via
+**Actions → Build & Release → Run workflow**) — no version tag required. Pushing a `v*` tag instead
+publishes its own separate, permanently pinned release.
 
 ## Usage
 
