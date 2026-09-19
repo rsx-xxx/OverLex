@@ -39,7 +39,7 @@ jobs:
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           $ps1 = "dist/OverLex/_ocr_helper.ps1"
           if (-not (Test-Path $ps1)) { throw "OverLex.exe did not generate $ps1" }
-          python -c "from PIL import Image, ImageDraw; img = Image.new('RGB',(300,80),'white'); d = ImageDraw.Draw(img); d.text((10,20),'Hello World',fill='black'); img.save('ocr_test.bmp','BMP')"
+          python -c "from PIL import Image, ImageDraw, ImageFont; img = Image.new('RGB',(500,120),'white'); d = ImageDraw.Draw(img); f = ImageFont.truetype('arial.ttf', 48); d.text((20,30),'Hello World',fill='black',font=f); img.save('ocr_test.bmp','BMP')"
           $imgPath = (Resolve-Path "ocr_test.bmp").Path
           $out = & powershell -NonInteractive -NoProfile -ExecutionPolicy Bypass -File $ps1 $imgPath 2>&1
           Write-Output $out
