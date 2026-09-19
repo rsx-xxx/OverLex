@@ -3,81 +3,113 @@ name: Build & Release
 on:
   push:
     tags:
-      - 'v*'          # запускается при git tag v1.0.0 && git push --tags
+      - 'v*'          # triggered by: git tag v1.0.0 && git push --tags
 
 permissions:
-  contents: write   # нужно для создания релиза
+  contents: write   # required to create the GitHub release
 
 jobs:
   # ── Windows EXE ─────────────────────────────────────────────────────────────
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.13'
+          cache: 'pip'
 
-      - name: Установка зависимостей
+      - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
-      - name: Сборка EXE
+      - name: Build EXE
+        env:
+          OVERLEX_VERSION: ${{ github.ref_name }}
         run: python build_win.py
 
-      - name: Запаковать в zip
-        run: Compress-Archive -Path dist/OverLex -DestinationPath dist/OverLex-Windows.zip
+      - name: Package zip + checksum
+        run: |
+          Compress-Archive -Path dist/OverLex -DestinationPath dist/OverLex-Windows.zip
+          (Get-FileHash dist/OverLex-Windows.zip -Algorithm SHA256).Hash | Out-File -Encoding ascii dist/OverLex-Windows.zip.sha256
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: dist/OverLex-Windows.zip
+          path: |
+            dist/OverLex-Windows.zip
+            dist/OverLex-Windows.zip.sha256
 
   # ── macOS DMG ───────────────────────────────────────────────────────────────
   build-mac:
-    runs-on: macos-latest
+    runs-on: macos-latest   # Apple Silicon (arm64) only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
-      - name: Установка зависимостей
-        run: pip install -r requirements.txt pyinstaller
-
-      - name: Сборка DMG
+      - name: Build DMG
+        env:
+          OVERLEX_VERSION: ${{ github.ref_name }}
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: bash build_mac.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mac
-          path: dist/OverLex.dmg
+          path: |
+            dist/OverLex.dmg
+            dist/OverLex.dmg.sha256
 
   # ── GitHub Release ───────────────────────────────────────────────────────────
   release:
     needs: [build-windows, build-mac]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
 
-      - name: Создать релиз
+      - name: Combine checksums
+        run: cat artifacts/windows/*.sha256 artifacts/mac/*.sha256 > artifacts/SHA256SUMS.txt
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           name: "OverLex ${{ github.ref_name }}"
           body: |
-            ## OverLex ${{ github.ref_name }}
-            Ctrl + Middle Click — мгновенный перевод слова EN→RU прямо на экране.
+            # OverLex ${{ github.ref_name }}
 
-            ### Скачать
-            | Платформа | Файл |
+            Screen translation overlay for Windows and macOS.
+
+            ## Download
+            | Platform | File |
             |---|---|
-            | Windows 10/11 | `OverLex-Windows.zip` → распакуй, запусти `OverLex.exe` |
-            | macOS 12+ | `OverLex.dmg` → открой, перетащи в Applications |
+            | Windows 10/11 | `OverLex-Windows.zip` → unzip, run `OverLex.exe` |
+            | macOS 12+ (Apple Silicon) | `OverLex.dmg` → open, drag into Applications |
+
+            Verify a download against `SHA256SUMS.txt` before running it.
+
+            ## Windows SmartScreen
+            The Windows build is not code-signed (no EV certificate). On first run SmartScreen may
+            show "Windows protected your PC" — click **More info → Run anyway**. The binary is
+            unmodified from what this workflow built; you can confirm via the published checksum.
+
+            ## macOS Gatekeeper
+            The DMG is signed with a Developer ID certificate and notarized by Apple when the
+            repository has signing secrets configured; otherwise it is ad-hoc signed only, and
+            Gatekeeper will require **System Settings → Privacy & Security → Open Anyway**.
           files: |
             artifacts/windows/OverLex-Windows.zip
             artifacts/mac/OverLex.dmg
+            artifacts/SHA256SUMS.txt
           draft: false
           prerelease: false

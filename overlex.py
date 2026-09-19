@@ -64,7 +64,9 @@ foreach ($line in $result.Lines) {
 """
 
 _SWIFT_BODY = """
-import Vision, AppKit, Foundation
+import Vision
+import AppKit
+import Foundation
 let path = CommandLine.arguments[1]
 guard let img = NSImage(contentsOfFile: path),
       let cg  = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { exit(1) }
@@ -146,15 +148,16 @@ _log("[OverLex] OCR ready")
 
 # == Qt =======================================================================
 
-from PyQt5.QtWidgets import (QApplication, QWidget, QGraphicsDropShadowEffect,
-                             QSystemTrayIcon, QMenu, QAction)
-from PyQt5.QtCore   import Qt, QTimer, pyqtSignal, QObject, QPoint
-from PyQt5.QtGui    import (QFont, QColor, QPainter, QPainterPath,
-                             QLinearGradient, QFontMetrics, QIcon, QPixmap)
+from PySide6.QtWidgets import (QApplication, QWidget, QGraphicsDropShadowEffect,
+                             QSystemTrayIcon, QMenu)
+from PySide6.QtCore   import Qt, QTimer, Signal, QObject, QPoint
+from PySide6.QtGui    import (QFont, QColor, QPainter, QPainterPath,
+                             QLinearGradient, QFontMetrics, QIcon, QPixmap,
+                             QAction)
 
 class _Bus(QObject):
-    show     = pyqtSignal(int, int, str)
-    hide_now = pyqtSignal()
+    show     = Signal(int, int, str)
+    hide_now = Signal()
 bus = _Bus()
 
 # == Translation ==============================================================
@@ -178,24 +181,54 @@ def _tr(text):
 
 # == Input hooks ==============================================================
 
-_ctrl = False; _busy = False
+def _keys(*names):
+    return {getattr(pkeyboard.Key, name) for name in names if hasattr(pkeyboard.Key, name)}
+
+_CTRL_KEYS = _keys("ctrl", "ctrl_l", "ctrl_r")
+_ALT_KEYS = _keys("alt", "alt_l", "alt_r", "alt_gr")
+
+_ctrl = False; _alt = False; _busy = False; _last_xy = (0, 0)
+_mouse_ctl = pmouse.Controller()
+
+def _start_at(x, y):
+    global _busy
+    if not _busy:
+        _busy = True
+        threading.Thread(target=_run, args=(x, y), daemon=True).start()
+
+def _current_xy():
+    try:
+        x, y = _mouse_ctl.position
+        return int(x), int(y)
+    except Exception:
+        return _last_xy
 
 def _kp(k):
-    global _ctrl
-    if k in (pkeyboard.Key.ctrl_l, pkeyboard.Key.ctrl_r): _ctrl = True
+    global _ctrl, _alt
+    if k in _CTRL_KEYS: _ctrl = True
+    elif k in _ALT_KEYS: _alt = True
+    elif _IS_MAC and k == pkeyboard.Key.space and _ctrl and _alt:
+        _log("[input] Ctrl+Option+Space")
+        _start_at(*_current_xy())
 
 def _kr(k):
-    global _ctrl
-    if k in (pkeyboard.Key.ctrl_l, pkeyboard.Key.ctrl_r): _ctrl = False
+    global _ctrl, _alt
+    if k in _CTRL_KEYS: _ctrl = False
+    elif k in _ALT_KEYS: _alt = False
+
+def _mm(x, y):
+    global _last_xy
+    _last_xy = (x, y)
 
 def _mc(x, y, b, pressed):
-    global _busy
     if not pressed: return
-    if b == pmouse.Button.middle and _ctrl:
-        if not _busy:
-            _busy = True
-            threading.Thread(target=_run, args=(x,y), daemon=True).start()
-    elif b != pmouse.Button.middle:
+    if _IS_MAC and b == pmouse.Button.left and _alt:
+        _log(f"[input] Option+Click at {int(x)},{int(y)}")
+        _start_at(x, y)
+    elif _IS_WIN and b == pmouse.Button.middle and _ctrl:
+        _log(f"[input] Ctrl+MiddleClick at {int(x)},{int(y)}")
+        _start_at(x, y)
+    elif (_IS_MAC and b != pmouse.Button.left) or (_IS_WIN and b != pmouse.Button.middle):
         bus.hide_now.emit()
 
 # == OCR helpers ==============================================================
@@ -351,9 +384,9 @@ class Overlay(QWidget):
 
 # == Autostart ================================================================
 
-def _autostart_val():
-    if getattr(sys,"frozen",False): return str(Path(sys.executable))
-    return f"{sys.executable} {Path(__file__).resolve()}"
+def _autostart_args():
+    if getattr(sys,"frozen",False): return [str(Path(sys.executable))]
+    return [sys.executable, str(Path(__file__).resolve())]
 
 def _autostart_set(enable: bool):
     if _IS_WIN:
@@ -363,7 +396,8 @@ def _autostart_set(enable: bool):
                     r"Software\Microsoft\Windows\CurrentVersion\Run",
                     0, winreg.KEY_SET_VALUE) as k:
                 if enable:
-                    winreg.SetValueEx(k,APP_NAME,0,winreg.REG_SZ,f'"{_autostart_val()}"')
+                    value = " ".join(f'"{p}"' for p in _autostart_args())
+                    winreg.SetValueEx(k,APP_NAME,0,winreg.REG_SZ,value)
                 else:
                     try: winreg.DeleteValue(k,APP_NAME)
                     except FileNotFoundError: pass
@@ -371,8 +405,7 @@ def _autostart_set(enable: bool):
     elif _IS_MAC:
         plist = Path.home()/"Library"/"LaunchAgents"/"com.overlex.app.plist"
         if enable:
-            parts = _autostart_val().split()
-            args = "".join(f"<string>{p}</string>" for p in parts)
+            args = "".join(f"<string>{p}</string>" for p in _autostart_args())
             plist.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -401,7 +434,8 @@ def _autostart_get():
 class Tray(QSystemTrayIcon):
     def __init__(self, icon, app):
         super().__init__(icon); self._app=app; self._enabled=True
-        self.setToolTip("OverLex — Ctrl+Middle Click")
+        hint = "Option+Click / Ctrl+Option+Space" if _IS_MAC else "Ctrl+Middle Click"
+        self.setToolTip(f"OverLex - {hint}")
         self._menu = QMenu()
 
         self._a_on = QAction("Active"); self._a_on.setCheckable(True)
@@ -444,12 +478,13 @@ def main():
     _tray_ref = Tray(_make_icon(), app)
     ov = Overlay(); bus.show.connect(ov.present); bus.hide_now.connect(ov.hide)
     kb = pkeyboard.Listener(on_press=_kp, on_release=_kr)
-    ms = pmouse.Listener(on_click=_mc_guard)
+    ms = pmouse.Listener(on_move=_mm, on_click=_mc_guard)
     kb.daemon = ms.daemon = True; kb.start(); ms.start()
     _log("[main] listeners OK")
-    _tray_ref.showMessage("OverLex", "Ctrl+Middle Click to translate.",
+    hint = "Option+Click or Ctrl+Option+Space" if _IS_MAC else "Ctrl+Middle Click"
+    _tray_ref.showMessage("OverLex", f"{hint} to translate.",
                           QSystemTrayIcon.Information, 2000)
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
