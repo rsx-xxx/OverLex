@@ -56,8 +56,18 @@ $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-O
 })[0]
 
 function Await($WinRtTask, $ResultType) {
+    # The -as operator silently returns null here instead of casting: it works for a
+    # WinRT static method's return value (already strongly typed) but not for an
+    # instance method's return value (a plain untyped __ComObject). Force the
+    # QueryInterface directly via Marshal instead, which doesn't rely on PowerShell's
+    # type-inference heuristics.
     $asyncInterface = [Windows.Foundation.IAsyncOperation`1].MakeGenericType($ResultType)
-    $castedTask = $WinRtTask -as $asyncInterface
+    $ptr = [System.Runtime.InteropServices.Marshal]::GetIUnknownForObject($WinRtTask)
+    try {
+        $castedTask = [System.Runtime.InteropServices.Marshal]::GetTypedObjectForIUnknown($ptr, $asyncInterface)
+    } finally {
+        [System.Runtime.InteropServices.Marshal]::Release($ptr) | Out-Null
+    }
     $task = $asTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($castedTask))
     $task.Wait(-1) | Out-Null
     $task.Result
