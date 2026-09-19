@@ -39,23 +39,29 @@ _PS_BODY = r"""
 param([string]$imgPath)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -AssemblyName System.Drawing
-$null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.SoftwareBitmap,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Storage.Streams.IBuffer,Windows.Foundation,ContentType=WindowsRuntime]
 
-# IAsyncOperation<T>.GetResults() isn't reliably callable through PowerShell's own
-# dynamic COM dispatch for a WinRT object returned by an instance method (only works
-# when the object comes straight from a static method call, which is already
-# strongly typed). C#'s `dynamic` keyword uses the DLR runtime binder instead, which
-# has real support for late-bound WinRT/IInspectable dispatch including generic
-# interface members - so do the wait/GetResults() there instead of in PowerShell.
-Add-Type -ReferencedAssemblies Microsoft.CSharp,System.Core -Language CSharp -TypeDefinition @"
-using System.Threading;
-public static class WinRtAwait {
-    public static object GetResult(dynamic asyncOp) {
-        while ((int)asyncOp.Status == 0) { Thread.Sleep(5); }
-        if ((int)asyncOp.Status == 3) { throw new System.Exception("WinRT error: " + asyncOp.ErrorCode); }
-        return asyncOp.GetResults();
+# IAsyncOperation<T>.GetResults() isn't reliably callable through any of
+# PowerShell's dynamic dispatch mechanisms (native COM adapter, reflection with a
+# manual QI, or C# `dynamic`) - none of them have real static type information
+# about the WinRT object without an actual metadata (.winmd) reference. Compile a
+# tiny helper against the real metadata instead, so this is genuinely statically
+# typed - exactly like a normal compiled app calling a WinRT API.
+$winmd = "$env:WINDIR\System32\WinMetadata"
+Add-Type -Language CSharp -ReferencedAssemblies @(
+    "$winmd\Windows.Foundation.winmd",
+    "$winmd\Windows.Media.winmd",
+    "$winmd\Windows.Graphics.winmd",
+    "System.Runtime.WindowsRuntime"
+) -TypeDefinition @"
+using Windows.Graphics.Imaging;
+using Windows.Media.Ocr;
+public static class OcrHelper {
+    public static OcrResult Recognize(SoftwareBitmap bitmap) {
+        var engine = OcrEngine.TryCreateFromUserProfileLanguages();
+        if (engine == null) throw new System.Exception("No OCR engine available for the current user profile languages");
+        return engine.RecognizeAsync(bitmap).AsTask().GetAwaiter().GetResult();
     }
 }
 "@
@@ -74,9 +80,7 @@ $buffer = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExt
 $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer(
     $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [uint32]$w, [uint32]$h)
 
-$engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if (-not $engine) { throw "No OCR engine available for the current user profile languages" }
-$result  = [WinRtAwait]::GetResult($engine.RecognizeAsync($bitmap))
+$result = [OcrHelper]::Recognize($bitmap)
 
 foreach ($line in $result.Lines) {
     foreach ($word in $line.Words) {

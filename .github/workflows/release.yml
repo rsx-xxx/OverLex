@@ -31,11 +31,6 @@ jobs:
           OVERLEX_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('0.0.{0}', github.run_number) }}
         run: python build_win.py
 
-      - name: Diagnose WinMetadata layout
-        shell: pwsh
-        run: |
-          Get-ChildItem "$env:WINDIR\System32\WinMetadata" -Filter "*.winmd" | Select-Object -ExpandProperty Name | Sort-Object
-
       - name: Smoke test OCR helper
         shell: pwsh
         run: |
