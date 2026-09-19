@@ -65,6 +65,7 @@ if (-not (Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30
 $dllPath = Join-Path $env:TEMP "OverLexOcrHelper.dll"
 if (-not (Test-Path $dllPath)) {
     $csSource = @'
+using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 public static class OcrHelper {
