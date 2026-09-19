@@ -13,6 +13,10 @@ Works over games, browsers, any application.
 
 Each release also publishes `SHA256SUMS.txt` — verify a downloaded file against it before running.
 
+Want a build without cutting a version tag? Every push to `main` (and manual runs via
+**Actions → Build & Release → Run workflow**) also builds the EXE/DMG — grab them from that run's
+**Artifacts** section at the bottom of the Actions run page.
+
 ## Usage
 
 | Action | Result |
@@ -75,3 +79,7 @@ For a notarized release, add these GitHub repository secrets:
 
 Without these secrets, `build_mac.sh` produces an ad-hoc signature only. That's fine for local
 testing, but doesn't fully resolve Gatekeeper blocking for users who downloaded the file from GitHub.
+
+## License
+
+Public domain — do whatever you want with it, no warranty. See [LICENSE](LICENSE) (Unlicense).
