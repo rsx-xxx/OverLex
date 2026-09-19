@@ -138,6 +138,19 @@ fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
+echo "[selftest] running bundled OCR helper against a synthetic test image..."
+TEST_IMG="build/ocr_test.png"
+"$PYTHON_BIN" -c "
+from PIL import Image, ImageDraw
+img = Image.new('RGB', (300, 80), 'white')
+d = ImageDraw.Draw(img)
+d.text((10, 20), 'Hello World', fill='black')
+img.save('$TEST_IMG')
+"
+OCR_OUT=$("$APP_PATH/Contents/Frameworks/_ocr_helper_bin" "$TEST_IMG")
+echo "[selftest] OCR output: $OCR_OUT"
+echo "$OCR_OUT" | grep -qi "Hello" || { echo "[!] OCR smoke test did not recognize the test image"; exit 1; }
+
 DMG_ROOT="build/dmg-root"
 rm -rf "$DMG_ROOT"
 mkdir -p "$DMG_ROOT"

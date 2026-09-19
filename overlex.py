@@ -41,19 +41,28 @@ Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.BitmapDecoder,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Storage.StorageFile,Windows.Foundation,ContentType=WindowsRuntime]
+$null=[Windows.Storage.Streams.IRandomAccessStream,Windows.Storage.Streams,ContentType=WindowsRuntime]
 
-function Await($op) {
-    while ($op.Status -eq 0) { [System.Threading.Thread]::Sleep(5) }
-    if ($op.Status -eq 3) { throw "WinRT error: $($op.ErrorCode)" }
-    $op.GetResults()
+# IAsyncOperation<T>.GetResults() isn't directly callable through PowerShell's COM
+# dispatch (generic WinRT interface method); convert to a real .NET Task via the
+# generic AsTask<T> extension method instead, found by reflection.
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+})[0]
+
+function Await($WinRtTask, $ResultType) {
+    $task = $asTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($WinRtTask))
+    $task.Wait(-1) | Out-Null
+    $task.Result
 }
 
-$file    = Await([Windows.Storage.StorageFile]::GetFileFromPathAsync($imgPath))
-$stream  = Await($file.OpenReadAsync())
-$decoder = Await([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream))
-$bitmap  = Await($decoder.GetSoftwareBitmapAsync())
+$file    = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($imgPath)) ([Windows.Storage.StorageFile])
+$stream  = Await ($file.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap  = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
 $engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-$result  = Await($engine.RecognizeAsync($bitmap))
+if (-not $engine) { throw "No OCR engine available for the current user profile languages" }
+$result  = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 
 foreach ($line in $result.Lines) {
     foreach ($word in $line.Words) {

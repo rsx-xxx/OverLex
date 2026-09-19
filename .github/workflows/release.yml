@@ -31,6 +31,20 @@ jobs:
           OVERLEX_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('0.0.{0}', github.run_number) }}
         run: python build_win.py
 
+      - name: Smoke test OCR helper
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist/OverLex/OverLex.exe" -PassThru
+          Start-Sleep -Seconds 5
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          $ps1 = "dist/OverLex/_ocr_helper.ps1"
+          if (-not (Test-Path $ps1)) { throw "OverLex.exe did not generate $ps1" }
+          python -c "from PIL import Image, ImageDraw; img = Image.new('RGB',(300,80),'white'); d = ImageDraw.Draw(img); d.text((10,20),'Hello World',fill='black'); img.save('ocr_test.bmp','BMP')"
+          $imgPath = (Resolve-Path "ocr_test.bmp").Path
+          $out = & powershell -NonInteractive -NoProfile -ExecutionPolicy Bypass -File $ps1 $imgPath 2>&1
+          Write-Output $out
+          if (-not ($out -match "Hello")) { throw "OCR smoke test did not recognize the test image. Output: $out" }
+
       - name: Package zip + checksum
         run: |
           Compress-Archive -Path dist/OverLex -DestinationPath dist/OverLex-Windows.zip
