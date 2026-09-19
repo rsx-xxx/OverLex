@@ -42,6 +42,7 @@ Add-Type -AssemblyName System.Drawing
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.SoftwareBitmap,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Security.Cryptography.CryptographicBuffer,Windows.Security.Cryptography,ContentType=WindowsRuntime]
+$null=[Windows.Storage.Streams.IBuffer,Windows.Foundation,ContentType=WindowsRuntime]
 
 # IAsyncOperation<T>.GetResults() isn't directly callable through PowerShell's COM
 # dispatch (generic WinRT interface method); convert to a real .NET Task via the
@@ -72,9 +73,10 @@ $bytes = New-Object byte[] ($bmpData.Stride * $h)
 $src.UnlockBits($bmpData)
 $src.Dispose()
 
-$buffer = [Windows.Security.Cryptography.CryptographicBuffer]::CreateFromByteArray($bytes)
+$rawBuffer = [Windows.Security.Cryptography.CryptographicBuffer]::CreateFromByteArray($bytes)
+$buffer = $rawBuffer -as [Windows.Storage.Streams.IBuffer]
 $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer(
-    $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, $w, $h)
+    $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [uint32]$w, [uint32]$h)
 
 $engine  = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if (-not $engine) { throw "No OCR engine available for the current user profile languages" }
