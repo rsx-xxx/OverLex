@@ -39,10 +39,42 @@ _PS_BODY = r"""
 param([string]$imgPath)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -AssemblyName System.Drawing
-$null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
-$null=[Windows.Media.Ocr.OcrResult,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Graphics.Imaging.SoftwareBitmap,Windows.Foundation,ContentType=WindowsRuntime]
 $null=[Windows.Storage.Streams.IBuffer,Windows.Foundation,ContentType=WindowsRuntime]
+
+# PowerShell's own dispatch never gives .NET reflection metadata for a WinRT
+# instance-method result (always plain System.__ComObject, zero interfaces) - only
+# plain IDispatch-style property/method access works, not generic interface members
+# like IAsyncOperation<T>.GetResults(). And Add-Type -TypeDefinition can't reference
+# raw .winmd files (its legacy CodeDom compiler doesn't understand metadata-only
+# assemblies). So compile with the real Roslyn csc.exe directly - which does support
+# .winmd references, same as any classic desktop project calling WinRT APIs - and
+# load the resulting DLL, which carries proper static typing throughout.
+$winmdDir = "$env:WINDIR\System32\WinMetadata"
+$wrRuntimeDll = [System.Reflection.Assembly]::Load("System.Runtime.WindowsRuntime").Location
+$csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+if (-not (Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+
+$dllPath = Join-Path $env:TEMP "OverLexOcrHelper.dll"
+if (-not (Test-Path $dllPath)) {
+    $csSource = @'
+using Windows.Graphics.Imaging;
+using Windows.Media.Ocr;
+public static class OcrHelper {
+    public static OcrResult Recognize(SoftwareBitmap bitmap) {
+        var engine = OcrEngine.TryCreateFromUserProfileLanguages();
+        if (engine == null) throw new System.Exception("No OCR engine available for the current user profile languages");
+        return engine.RecognizeAsync(bitmap).AsTask().GetAwaiter().GetResult();
+    }
+}
+'@
+    $csPath = Join-Path $env:TEMP "OverLexOcrHelper.cs"
+    Set-Content -Path $csPath -Value $csSource -Encoding UTF8
+    $refs = @($wrRuntimeDll, "$winmdDir\Windows.Foundation.winmd", "$winmdDir\Windows.Media.winmd", "$winmdDir\Windows.Graphics.winmd") -join ";"
+    $cscOut = & $csc /nologo /target:library "/out:$dllPath" "/reference:$refs" $csPath 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "csc.exe failed: $cscOut" }
+}
+Add-Type -Path $dllPath
 
 $src = [System.Drawing.Bitmap]::FromFile($imgPath)
 $w = $src.Width
@@ -58,17 +90,7 @@ $buffer = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExt
 $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer(
     $buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [uint32]$w, [uint32]$h)
 
-$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if (-not $engine) { throw "No OCR engine available for the current user profile languages" }
-$asyncOp = $engine.RecognizeAsync($bitmap)
-[Console]::Error.WriteLine("DIAG asyncOp type: " + $asyncOp.GetType().FullName)
-[Console]::Error.WriteLine("DIAG asyncOp interfaces: " + (($asyncOp.GetType().GetInterfaces() | ForEach-Object { $_.FullName }) -join ", "))
-$engineType = $engine.GetType()
-$recognizeMethod = $engineType.GetMethod("RecognizeAsync")
-[Console]::Error.WriteLine("DIAG RecognizeAsync declared return type: " + $recognizeMethod.ReturnType.FullName)
-$asyncOp2 = $recognizeMethod.Invoke($engine, @($bitmap))
-[Console]::Error.WriteLine("DIAG asyncOp2 (via reflection) type: " + $asyncOp2.GetType().FullName)
-$result = $null
+$result = [OcrHelper]::Recognize($bitmap)
 
 foreach ($line in $result.Lines) {
     foreach ($word in $line.Words) {
