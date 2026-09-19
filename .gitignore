@@ -7,7 +7,6 @@ dist/
 *.spec
 _ocr_helper_bin
 _ocr_helper.ps1
-_ocr_helper.swift
 .idea/
 .vscode/
 .DS_Store

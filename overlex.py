@@ -63,27 +63,6 @@ foreach ($line in $result.Lines) {
 }
 """
 
-_SWIFT_BODY = """
-import Vision
-import AppKit
-import Foundation
-let path = CommandLine.arguments[1]
-guard let img = NSImage(contentsOfFile: path),
-      let cg  = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { exit(1) }
-let req = VNRecognizeTextRequest()
-req.recognitionLevel = .accurate
-try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([req])
-for obs in (req.results ?? []) {
-    guard let top = obs.topCandidates(1).first else { continue }
-    let b = obs.boundingBox
-    let x = b.origin.x * Double(cg.width)
-    let y = (1 - b.origin.y - b.size.height) * Double(cg.height)
-    let w = b.size.width  * Double(cg.width)
-    let h = b.size.height * Double(cg.height)
-    print("\\(x)|\\(y)|\\(w)|\\(h)|\\(top.string)")
-}
-"""
-
 if _IS_WIN:
     import subprocess
     _PS_SCRIPT = _exe_dir / "_ocr_helper.ps1"
@@ -116,12 +95,13 @@ if _IS_WIN:
 
 elif _IS_MAC:
     import subprocess
-    _SWIFT_SRC = _exe_dir / "_ocr_helper.swift"
     _SWIFT_BIN = _exe_dir / "_ocr_helper_bin"
-    _SWIFT_SRC.write_text(_SWIFT_BODY, encoding="utf-8")
     if not _SWIFT_BIN.exists():
+        # Packaged builds bundle a precompiled _ocr_helper_bin (see build_mac.sh) so end
+        # users never need Xcode installed; this compile path is for running from source.
+        _SWIFT_SRC = Path(__file__).resolve().parent / "macos_ocr_helper.swift"
         _log("[ocr] compiling swift helper...")
-        subprocess.run(["swiftc", str(_SWIFT_SRC), "-o", str(_SWIFT_BIN)], check=True)
+        subprocess.run(["swiftc", str(_SWIFT_SRC), "-O", "-o", str(_SWIFT_BIN)], check=True)
 
     def _ocr(img: Image.Image):
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:

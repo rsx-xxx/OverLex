@@ -65,7 +65,7 @@ BUILD_VENV="${BUILD_VENV:-build/.venv-macos}"
 PYTHON_BIN="$BUILD_VENV/bin/python"
 "$PYTHON_BIN" -m pip install --upgrade pip -q
 "$PYTHON_BIN" -m pip install -r requirements.txt pyinstaller -q
-swiftc macos_ocr_helper.swift -O -o build/macos_ocr_helper
+swiftc macos_ocr_helper.swift -O -o build/_ocr_helper_bin
 
 ICON_PNG="build/icon_1024.png"
 ICONSET="build/OverLex.iconset"
@@ -84,7 +84,7 @@ OVERLEX_VERSION="${OVERLEX_VERSION#v}"
   --icon build/icon.icns \
   --collect-all PIL --collect-all mss \
   --collect-all pynput --collect-all PySide6 \
-  --add-binary "build/macos_ocr_helper:." \
+  --add-binary "build/_ocr_helper_bin:." \
   --hidden-import pynput.keyboard._darwin \
   --hidden-import pynput.mouse._darwin \
   $EXCL_FLAGS \
