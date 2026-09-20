@@ -130,7 +130,8 @@ if _IS_WIN:
             r = subprocess.run(
                 ["powershell", "-NonInteractive", "-NoProfile",
                  "-ExecutionPolicy", "Bypass", "-File", str(_PS_SCRIPT), abs_tmp],
-                capture_output=True, text=True, timeout=12)
+                capture_output=True, text=True, timeout=12,
+                creationflags=subprocess.CREATE_NO_WINDOW)
             items = []
             for line in r.stdout.strip().splitlines():
                 p = line.strip().split("|")
@@ -362,6 +363,23 @@ C_BG  = QColor(8,10,20,165)
 C_AT  = QColor(48,130,255); C_AB = QColor(110,65,250)
 C_TR  = QColor(230,240,255,255); C_BDR = QColor(255,255,255,18)
 
+def _phys_to_logical(px, py):
+    """pynput/mss report raw physical pixels on Windows; Qt's HiDPI-scaled
+    widget positioning speaks logical pixels. Without this conversion the
+    popup lands off by the monitor's scale factor on any non-100% display."""
+    if not _IS_WIN:
+        return px, py
+    for scr in QApplication.screens():
+        dpr = scr.devicePixelRatio()
+        g = scr.geometry()
+        left, top = g.left()*dpr, g.top()*dpr
+        right, bottom = left+g.width()*dpr, top+g.height()*dpr
+        if left <= px < right and top <= py < bottom:
+            return g.left()+(px-left)/dpr, g.top()+(py-top)/dpr
+    scr = QApplication.primaryScreen()
+    dpr = scr.devicePixelRatio() if scr else 1.0
+    return px/dpr, py/dpr
+
 class Overlay(QWidget):
     def __init__(self):
         super().__init__()
@@ -377,6 +395,7 @@ class Overlay(QWidget):
         self._text = ""; self._font = QFont("Segoe UI",20,QFont.Bold)
 
     def present(self, sx, sy, word):
+        sx, sy = _phys_to_logical(sx, sy)
         self._text = word
         fname = "Segoe UI" if _IS_WIN else "SF Pro Display"
         max_tw = OW-PAD_H*2-ABAR-6
