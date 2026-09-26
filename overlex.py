@@ -439,6 +439,13 @@ def _run(x, y, gen):
 def _run_region(l, t, w, h, gen):
     try:
         _log(f"[region] gen={gen} capture rect=({l},{t},{w},{h})")
+        # The selection overlay sits directly on top of this exact area and
+        # was just hide()-den - give the compositor a moment to actually stop
+        # showing it before we grab pixels. Windows also excludes that window
+        # from capture outright (see _exclude_from_capture); this is the
+        # backstop for macOS and any case where that doesn't apply. Runs in
+        # this background thread, so it costs no perceived UI latency.
+        time.sleep(0.08)
         with mss.MSS() as sct:
             raw = sct.grab({"left": l, "top": t, "width": w, "height": h})
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
@@ -622,6 +629,24 @@ class BlockOverlay(QWidget):
 
 # == Region selector (drag-to-select rubber band for sentence mode) ==========
 
+def _exclude_from_capture(widget):
+    # This overlay sits directly on top of the exact area we're about to
+    # screenshot for OCR - hide()-then-grab() has a real, measured intermittent
+    # race where mss can still see this window's last-composited frame for a
+    # variable, non-monotonic delay (confirmed empirically: capturing 15ms-
+    # 200ms after hide() still occasionally returned the pre-hide frame).
+    # WDA_EXCLUDEFROMCAPTURE makes Windows omit this window from every screen
+    # capture unconditionally, regardless of hide/show timing - eliminates the
+    # race outright instead of guessing at a delay. (Windows 10 2004+; no
+    # macOS equivalent without PyObjC, so macOS relies on the settle delay in
+    # _run_region instead.)
+    if _IS_WIN:
+        import ctypes
+        try:
+            ctypes.windll.user32.SetWindowDisplayAffinity(int(widget.winId()), 0x11)
+        except Exception as e:
+            _log(f"[capture] SetWindowDisplayAffinity failed: {e}")
+
 class RegionSelector(QWidget):
     def __init__(self):
         super().__init__()
@@ -629,6 +654,7 @@ class RegionSelector(QWidget):
                             Qt.Tool|Qt.WindowTransparentForInput|Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self._raw_a = (0,0); self._raw_b = (0,0); self._geo = None
+        self._excluded = False
 
     def begin(self, x, y):
         self._raw_a = self._raw_b = (x, y)
@@ -637,6 +663,8 @@ class RegionSelector(QWidget):
         self._geo = scr.geometry()
         self.setGeometry(self._geo)
         self.show(); self.raise_(); self.update()
+        if not self._excluded:
+            _exclude_from_capture(self); self._excluded = True
 
     def move_to(self, x, y):
         # Repaint only the changed strip, not the whole (often 4K) virtual screen -
