@@ -504,23 +504,12 @@ C_TR  = QColor(230,240,255,255)
 def _paint_card(painter, w, h):
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.TextAntialiasing)
-    outer = QPainterPath(); outer.addRoundedRect(.5,.5,w-1,h-1,R,R)
-
-    # Same soft neon-glow language as the region-select frame, so both read as
-    # one design system instead of two separately styled surfaces.
-    for width, alpha in ((7,12),(4,20),(2,32)):
-        glow = QColor(C_AT); glow.setAlpha(alpha)
-        painter.setPen(QPen(glow, width)); painter.drawPath(outer)
-
     clip=QPainterPath(); clip.addRoundedRect(0,0,w,h,R,R)
     painter.setClipPath(clip); painter.fillRect(0,0,w,h,C_BG)
     bar=QPainterPath(); bar.addRoundedRect(0,0,ABAR,h,1,1)
     g=QLinearGradient(0,0,0,h); g.setColorAt(0,C_AT); g.setColorAt(1,C_AB)
     painter.fillPath(bar,g)
     painter.setClipping(False)
-    border_grad = QLinearGradient(0,0,w,h)
-    border_grad.setColorAt(0,C_AT); border_grad.setColorAt(1,C_AB)
-    painter.setPen(QPen(QBrush(border_grad), 1.2)); painter.drawPath(outer)
 
 def _place_near(widget, sx, sy):
     scr = QApplication.screenAt(QPoint(sx,sy)) or QApplication.primaryScreen()
