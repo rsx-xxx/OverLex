@@ -3,17 +3,17 @@
 ; Expects dist\OverLex\ (the PyInstaller onedir output) and build\icon.ico to already
 ; exist - run build_win.py first.
 ;
-; AppId must NEVER change across releases: Inno Setup uses it (not the version number)
-; to recognize "this machine already has OverLex installed" and upgrade in place -
-; same install directory, same Start Menu entry, no duplicate Add/Remove Programs row.
-#define AppId "{8FAF97B8-273B-4EF5-BC01-10AD80DE9B1F}"
-
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
 
 [Setup]
-AppId={#AppId}
+; Must NEVER change across releases: Inno Setup uses this (not the version number) to
+; recognize "this machine already has OverLex installed" and upgrade in place - same
+; install directory, same Start Menu entry, no duplicate Add/Remove Programs row.
+; The doubled leading brace is Inno's escape for a literal "{" (a single "{GUID}" is
+; parsed as a {constant} reference and fails with "Unknown constant").
+AppId={{8FAF97B8-273B-4EF5-BC01-10AD80DE9B1F}
 AppName=OverLex
 AppVersion={#AppVersion}
 AppPublisher=OverLex
