@@ -1,8 +1,7 @@
 # OverLex
 
-**Windows:** `Ctrl + Middle Click`; **macOS:** `Option + Click` or `Ctrl + Option + Space` — instant on-screen EN→RU translation.
-
-Works over games, browsers, any application.
+Instant on-screen EN→RU translation. Point at a word, or drag over a sentence — works over
+games, browsers, any application, no copy-paste needed.
 
 ## Download
 
@@ -11,103 +10,39 @@ Works over games, browsers, any application.
 | Windows 10/11 | [OverLex-Setup.exe](../../releases/latest) |
 | macOS 12+ (Apple Silicon) | [OverLex.dmg](../../releases/latest) |
 
-`OverLex-Setup.exe` installs to Program Files, offers a launch-at-startup checkbox, and
-upgrades an existing install in place — no duplicate Start Menu entries, and it closes/relaunches
-a running OverLex automatically instead of leaving an old copy running in the background.
-
-Each release also publishes `SHA256SUMS.txt` — verify a downloaded file against it before running.
-
-The `latest` release above tracks the most recent commit on `main` (rebuilt on every push, or via
-**Actions → Build & Release → Run workflow**) — no version tag required. Pushing a `v*` tag instead
-publishes its own separate, permanently pinned release.
+The installer isn't code-signed (that costs money this hobby project doesn't spend), so Windows
+SmartScreen and macOS Gatekeeper will warn on first run — click through (**More info → Run
+anyway** / **Open Anyway** in System Settings → Privacy & Security). Verify the download against
+the release's `SHA256SUMS.txt` if you want assurance it wasn't tampered with.
 
 ## Usage
 
 | Action | Result |
 |---|---|
-| Windows: `Ctrl` + Middle Click | Translate the word under the cursor |
-| macOS: `Option` + Click | Translate the word under the cursor (trackpad) |
-| macOS: `Ctrl` + `Option` + `Space` | Translate the word at the current cursor position without clicking |
-| Windows: `Ctrl` + Middle Click, **drag**, release | Select a region — OCRs the whole area and translates it as one block of text (sentence mode) |
-| macOS: `Option` + Click, **drag**, release | Same, sentence mode |
-| `Esc` while dragging | Cancel the region selection |
-| Click on the overlay | Dismiss it |
-| 5 seconds | Auto-hide |
-| Tray icon | Pause / Launch at login / Quit |
+| **Windows:** `Ctrl` + Middle Click a word | Translate that word |
+| **macOS:** `Option` + Click a word | Translate that word |
+| **macOS:** `Ctrl` + `Option` + `Space` | Translate the word under the cursor, no click needed |
+| Same click, but **hold and drag** before releasing | Select a region — translates everything inside it as one sentence |
+| `Esc` while dragging | Cancel the selection |
+| Click the popup | Dismiss it |
+| Tray icon | Pause, launch-at-login, or quit |
 
-Sentence mode reflows the recognized lines into a single block before translating, so it
-reads as one continuous sentence/paragraph instead of being translated word by word.
+If a translation ever just shows the original text back unchanged, check `overlex.log`
+(`%LOCALAPPDATA%\OverLex\` on Windows, `~/Library/Application Support/OverLex/` on macOS) — it
+logs exactly which translation attempt failed and why.
 
-Translation calls Google's free (unofficial, no API key) endpoint first, retrying once, then
-falls back to MyMemory's free API if that's unavailable or rate-limited — the two have
-independent quotas, so one being throttled doesn't take translation down entirely. If it ever
-just shows the original text back, check `overlex.log` (`%LOCALAPPDATA%\OverLex\` on Windows,
-`~/Library/Application Support/OverLex/` on macOS) for the `[tr] ... failed: ...` line explaining
-why.
-
-## Install from source
+## Building from source
 
 ```bash
 pip install -r requirements.txt
-python overlex.py
+python overlex.py          # run
+build_win.bat               # or: bash build_mac.sh — produces the installer/DMG
 ```
 
-**Windows:** PowerShell is built in, nothing else needed.
-**macOS from source:** requires Xcode Command Line Tools (`xcode-select --install`) to compile the Swift OCR helper.
-**macOS:** add OverLex under System Settings → Privacy & Security → Accessibility.
-
-## Build
-
-**Windows:**
-```bat
-build_win.bat
-```
-
-**macOS:**
-```bash
-bash build_mac.sh
-```
-
-Both scripts embed an app icon and version metadata (set `OVERLEX_VERSION=1.2.3` to stamp a version;
-the release workflow sets it from the pushed git tag automatically).
-
-## Windows SmartScreen
-
-Neither the installer nor the EXE is code-signed (no EV certificate — those cost real money and
-this is a hobby project) — SmartScreen may show "Windows protected your PC" on first run of either
-one. Click **More info → Run anyway**. This can't be fully removed without buying a certificate;
-verify the download against `SHA256SUMS.txt` in the release if you want assurance the file wasn't
-tampered with instead.
-
-## Windows installer
-
-`OverLex-Setup.exe` (built with Inno Setup, see `installer/OverLex.iss`) installs to
-`C:\Program Files\OverLex`. Writing to Program Files needs one admin/UAC prompt during install —
-Windows has no way around that — but the installed app still runs without admin afterward.
-Re-running the installer over an existing install (including on every
-"latest" build) upgrades in place: same Start Menu entry, no duplicate Add/Remove Programs rows,
-and if OverLex is currently running it gets closed and the freshly installed copy relaunched
-automatically, so an update never leaves an old process behind.
-
-## macOS release signing
-
-A DMG from GitHub Releases should be signed with a Developer ID certificate and notarized by Apple,
-otherwise Gatekeeper may block it even after "Open Anyway".
-
-For a notarized release, add these GitHub repository secrets:
-
-| Secret | Value |
-|---|---|
-| `MACOS_CERTIFICATE_BASE64` | base64 of a `.p12` containing a `Developer ID Application` certificate |
-| `MACOS_CERTIFICATE_PASSWORD` | password for the `.p12` |
-| `MACOS_CODESIGN_IDENTITY` | optional, e.g. `Developer ID Application: ...` |
-| `MACOS_KEYCHAIN_PASSWORD` | any temporary password for the CI keychain |
-| `APPLE_ID` | Apple Developer account Apple ID |
-| `APPLE_TEAM_ID` | Team ID from Apple Developer |
-| `APPLE_APP_PASSWORD` | app-specific password for notarization |
-
-Without these secrets, `build_mac.sh` produces an ad-hoc signature only. That's fine for local
-testing, but doesn't fully resolve Gatekeeper blocking for users who downloaded the file from GitHub.
+macOS needs Xcode Command Line Tools (`xcode-select --install`) and Accessibility permission
+(System Settings → Privacy & Security → Accessibility). Build/CI details, the Inno Setup script,
+and macOS notarization secrets are in `installer/`, `.github/workflows/release.yml`, and
+`build_mac.sh` respectively.
 
 ## License
 

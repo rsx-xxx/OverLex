@@ -273,15 +273,25 @@ _ALT_KEYS = _keys("alt", "alt_l", "alt_r", "alt_gr")
 
 DRAG_PX = 6  # move further than this before release -> sentence mode; otherwise -> word mode
 
-_ctrl = False; _alt = False; _busy = False; _last_xy = (0, 0)
+_ctrl = False; _alt = False; _last_xy = (0, 0)
 _armed = False; _drag_button = None; _press_xy = (0, 0); _dragging = False
 _mouse_ctl = pmouse.Controller()
 
+# A generation counter, not a busy-flag: translation now retries and can fall back to
+# a second provider, so a single call can take a few seconds. A boolean "busy" gate
+# would silently drop a new selection made while an old one was still resolving,
+# leaving its stale result sitting on screen looking "stuck". Instead every gesture
+# always starts immediately, and a result only gets displayed if it's still the most
+# recent request by the time it completes - an outdated one is just discarded.
+_gen = 0
+def _next_gen():
+    global _gen
+    _gen += 1
+    return _gen
+
 def _start_at(x, y):
-    global _busy
-    if not _busy:
-        _busy = True
-        threading.Thread(target=_run, args=(x, y), daemon=True).start()
+    gen = _next_gen()
+    threading.Thread(target=_run, args=(x, y, gen), daemon=True).start()
 
 def _current_xy():
     try:
@@ -388,8 +398,7 @@ def _group_text(rows):
 
 # == Pipeline =================================================================
 
-def _run(x, y):
-    global _busy
+def _run(x, y, gen):
     try:
         lft,top = max(0,x-CAPTURE_W//2), max(0,y-CAPTURE_H//2)
         with mss.MSS() as sct:
@@ -410,21 +419,20 @@ def _run(x, y):
             d = ((rx-(bx+bw/2))**2+(ry-(by+bh/2))**2)**.5
             if d < best_d: best_d = d; found = _word_at(text,bx,bw,rx)
 
+        if gen != _gen: return  # superseded by a newer click while OCR was running
         if best_d > 300 or not found: bus.hide_now.emit(); return
         clean = re.sub(r"[^\w'\-]","",found).strip()
         if not clean or len(clean) < 2: bus.hide_now.emit(); return
 
         result = _tr(clean)
+        if gen != _gen: return  # superseded while translating
         _log(f"[run] {clean!r} -> {result!r}")
         bus.show.emit(x, y, result)
     except Exception as e:
         _log(f"[run] {e}"); import traceback; _log(traceback.format_exc())
-        bus.hide_now.emit()
-    finally:
-        _busy = False
+        if gen == _gen: bus.hide_now.emit()
 
-def _run_region(l, t, w, h):
-    global _busy
+def _run_region(l, t, w, h, gen):
     try:
         with mss.MSS() as sct:
             raw = sct.grab({"left": l, "top": t, "width": w, "height": h})
@@ -436,18 +444,18 @@ def _run_region(l, t, w, h):
 
         rows = _ocr(img)
         text = _group_text(rows)
+        if gen != _gen: return  # superseded by a newer selection while OCR was running
         if not text.strip():
             bus.hide_now.emit(); return
 
         flat = re.sub(r"\s*\n\s*", " ", text).strip()
         result = _tr(flat)
+        if gen != _gen: return  # superseded while translating
         _log(f"[region] {flat!r} -> {result!r}")
         bus.show_block.emit(l + w//2, t + h, result)
     except Exception as e:
         _log(f"[region] {e}"); import traceback; _log(traceback.format_exc())
-        bus.hide_now.emit()
-    finally:
-        _busy = False
+        if gen == _gen: bus.hide_now.emit()
 
 # == Focus ====================================================================
 
@@ -478,20 +486,33 @@ def _make_icon(size=64):
 OW=320; PAD_H=24; PAD_V=14; ABAR=3; R=12
 BW=440; MAX_BH=360  # block (sentence-mode) overlay: wider, taller, word-wrapped
 C_BG  = QColor(8,10,20,165)
-C_AT  = QColor(48,130,255); C_AB = QColor(110,65,250)
-C_TR  = QColor(230,240,255,255); C_BDR = QColor(255,255,255,18)
+# Same OKLCH-derived blue/violet the app icon uses (tools/gen_icon.py) - one
+# scientifically-picked palette shared by the icon, the word popup, and the
+# region-select frame instead of three separately hand-picked ones.
+from tools.gen_icon import C_TOP as _C_TOP, C_BOTTOM as _C_BOTTOM
+C_AT  = QColor(*_C_TOP); C_AB = QColor(*_C_BOTTOM)
+C_TR  = QColor(230,240,255,255)
 
 def _paint_card(painter, w, h):
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.TextAntialiasing)
+    outer = QPainterPath(); outer.addRoundedRect(.5,.5,w-1,h-1,R,R)
+
+    # Same soft neon-glow language as the region-select frame, so both read as
+    # one design system instead of two separately styled surfaces.
+    for width, alpha in ((7,12),(4,20),(2,32)):
+        glow = QColor(C_AT); glow.setAlpha(alpha)
+        painter.setPen(QPen(glow, width)); painter.drawPath(outer)
+
     clip=QPainterPath(); clip.addRoundedRect(0,0,w,h,R,R)
     painter.setClipPath(clip); painter.fillRect(0,0,w,h,C_BG)
     bar=QPainterPath(); bar.addRoundedRect(0,0,ABAR,h,1,1)
     g=QLinearGradient(0,0,0,h); g.setColorAt(0,C_AT); g.setColorAt(1,C_AB)
     painter.fillPath(bar,g)
-    painter.setClipping(False); painter.setPen(C_BDR)
-    brd=QPainterPath(); brd.addRoundedRect(.5,.5,w-1,h-1,R,R)
-    painter.drawPath(brd)
+    painter.setClipping(False)
+    border_grad = QLinearGradient(0,0,w,h)
+    border_grad.setColorAt(0,C_AT); border_grad.setColorAt(1,C_AB)
+    painter.setPen(QPen(QBrush(border_grad), 1.2)); painter.drawPath(outer)
 
 def _place_near(widget, sx, sy):
     scr = QApplication.screenAt(QPoint(sx,sy)) or QApplication.primaryScreen()
@@ -667,14 +688,13 @@ class RegionSelector(QWidget):
         # connection auto-queued onto this widget's own thread - without that,
         # hide()/paint state here would be touched from the pynput listener
         # thread and the dimmed frame could get stuck on screen forever.
-        global _busy
         self.move_to(x, y)
         l, t, w, h = self.capture_rect()
         self.hide()
-        if w < 8 or h < 8 or _busy:
+        if w < 8 or h < 8:
             return
-        _busy = True
-        threading.Thread(target=_run_region, args=(l, t, w, h), daemon=True).start()
+        gen = _next_gen()
+        threading.Thread(target=_run_region, args=(l, t, w, h, gen), daemon=True).start()
 
 # == Autostart ================================================================
 
@@ -728,9 +748,10 @@ def _autostart_get():
 class Tray(QSystemTrayIcon):
     def __init__(self, icon, app):
         super().__init__(icon); self._app=app; self._enabled=True
-        hint = ("Option+Click: click=word, drag=sentence" if _IS_MAC
-                else "Ctrl+Middle Click: click=word, drag=sentence")
-        self.setToolTip(f"OverLex - {hint}")
+        hint = ("Option+Click a word to translate it - hold and drag to translate a whole sentence"
+                if _IS_MAC else
+                "Ctrl+Middle Click a word to translate it - hold and drag to translate a whole sentence")
+        self.setToolTip(f"OverLex — {hint}")
         self._menu = QMenu()
 
         self._a_on = QAction("Active"); self._a_on.setCheckable(True)
@@ -782,10 +803,11 @@ def main():
     ms = pmouse.Listener(on_move=_mm, on_click=_mc_guard)
     kb.daemon = ms.daemon = True; kb.start(); ms.start()
     _log("[main] listeners OK")
-    hint = ("Option+Click: click=word, drag=sentence" if _IS_MAC
-            else "Ctrl+Middle Click: click=word, drag=sentence")
-    _tray_ref.showMessage("OverLex", f"{hint}.",
-                          QSystemTrayIcon.Information, 3000)
+    hint = ("Option+Click a word to translate it.\nHold and drag instead to translate a whole sentence."
+            if _IS_MAC else
+            "Ctrl+Middle Click a word to translate it.\nHold and drag instead to translate a whole sentence.")
+    _tray_ref.showMessage("OverLex is running", hint,
+                          QSystemTrayIcon.Information, 4000)
     sys.exit(app.exec())
 
 if __name__ == "__main__":
