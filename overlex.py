@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 OverLex - Screen Translation Overlay
-Ctrl + Middle Click -> instant EN->RU word translation.
-Ctrl + Shift + Middle Click drag (Win) / Option + Shift + Click drag (mac) ->
-drag-select a region, OCR the whole thing, translate it as one block of text.
+Ctrl + Middle Click (Win) / Option + Click (mac) -> instant EN->RU word translation.
+Same gesture, but drag before releasing -> select a region, OCR the whole thing,
+translate it as one block of text.
 Windows: PowerShell / Windows.Media.Ocr
 macOS:   Swift / Vision.framework
 """
@@ -20,7 +20,21 @@ _IS_WIN = platform.system() == "Windows"
 _IS_MAC = platform.system() == "Darwin"
 
 _exe_dir = Path(sys.executable if getattr(sys,"frozen",False) else __file__).parent
-_LOG = open(_exe_dir / "overlex.log", "w", buffering=1, encoding="utf-8")
+
+def _writable_data_dir() -> Path:
+    """Log file and the generated Windows OCR helper script need a location the
+    process can always write to - a Program Files install only grants that to a
+    per-user data dir, not to the install directory itself."""
+    if not getattr(sys, "frozen", False):
+        return _exe_dir
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) if _IS_WIN \
+        else Path.home() / "Library" / "Application Support"
+    d = base / "OverLex"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+_data_dir = _writable_data_dir()
+_LOG = open(_data_dir / "overlex.log", "w", buffering=1, encoding="utf-8")
 def _log(*a):
     s = " ".join(str(x) for x in a); print(s); _LOG.write(s+"\n")
 
@@ -124,7 +138,7 @@ foreach ($line in $result.Lines) {
 
 if _IS_WIN:
     import subprocess
-    _PS_SCRIPT = _exe_dir / "_ocr_helper.ps1"
+    _PS_SCRIPT = _data_dir / "_ocr_helper.ps1"
     _PS_SCRIPT.write_text(_PS_BODY, encoding="utf-8")
 
     def _ocr(img: Image.Image):
@@ -232,10 +246,11 @@ def _keys(*names):
 
 _CTRL_KEYS = _keys("ctrl", "ctrl_l", "ctrl_r")
 _ALT_KEYS = _keys("alt", "alt_l", "alt_r", "alt_gr")
-_SHIFT_KEYS = _keys("shift", "shift_l", "shift_r")
 
-_ctrl = False; _alt = False; _shift = False; _busy = False; _last_xy = (0, 0)
-_selecting = False; _sel_button = None
+DRAG_PX = 6  # move further than this before release -> sentence mode; otherwise -> word mode
+
+_ctrl = False; _alt = False; _busy = False; _last_xy = (0, 0)
+_armed = False; _drag_button = None; _press_xy = (0, 0); _dragging = False
 _mouse_ctl = pmouse.Controller()
 
 def _start_at(x, y):
@@ -252,52 +267,51 @@ def _current_xy():
         return _last_xy
 
 def _kp(k):
-    global _ctrl, _alt, _shift, _selecting
+    global _ctrl, _alt, _armed, _dragging
     if k in _CTRL_KEYS: _ctrl = True
     elif k in _ALT_KEYS: _alt = True
-    elif k in _SHIFT_KEYS: _shift = True
-    elif k == pkeyboard.Key.esc and _selecting:
+    elif k == pkeyboard.Key.esc and _armed:
         _log("[input] Esc cancel region select")
-        _selecting = False
+        _armed = False; _dragging = False
         bus.sel_cancel.emit()
     elif _IS_MAC and k == pkeyboard.Key.space and _ctrl and _alt:
         _log("[input] Ctrl+Option+Space")
         _start_at(*_current_xy())
 
 def _kr(k):
-    global _ctrl, _alt, _shift
+    global _ctrl, _alt
     if k in _CTRL_KEYS: _ctrl = False
     elif k in _ALT_KEYS: _alt = False
-    elif k in _SHIFT_KEYS: _shift = False
 
 def _mm(x, y):
-    global _last_xy
+    global _last_xy, _dragging
     _last_xy = (x, y)
-    if _selecting:
+    if not _armed: return
+    if not _dragging:
+        dx, dy = x-_press_xy[0], y-_press_xy[1]
+        if dx*dx + dy*dy >= DRAG_PX*DRAG_PX:
+            _dragging = True
+            bus.sel_start.emit(int(_press_xy[0]), int(_press_xy[1]))
+    if _dragging:
         bus.sel_move.emit(int(x), int(y))
 
 def _mc(x, y, b, pressed):
-    global _selecting, _sel_button
-    if _selecting:
-        if not pressed and b == _sel_button:
-            _selecting = False
-            bus.sel_end.emit(int(x), int(y))
+    global _armed, _drag_button, _press_xy, _dragging
+    if _armed:
+        if not pressed and b == _drag_button:
+            _armed = False
+            if _dragging:
+                _dragging = False
+                bus.sel_end.emit(int(x), int(y))
+            else:
+                _start_at(*_press_xy)
         return
     if not pressed: return
-    if _IS_MAC and b == pmouse.Button.left and _alt and _shift:
-        _log(f"[input] Option+Shift+Click at {int(x)},{int(y)}")
-        _selecting = True; _sel_button = b
-        bus.sel_start.emit(int(x), int(y))
-    elif _IS_WIN and b == pmouse.Button.middle and _ctrl and _shift:
-        _log(f"[input] Ctrl+Shift+MiddleClick at {int(x)},{int(y)}")
-        _selecting = True; _sel_button = b
-        bus.sel_start.emit(int(x), int(y))
-    elif _IS_MAC and b == pmouse.Button.left and _alt:
-        _log(f"[input] Option+Click at {int(x)},{int(y)}")
-        _start_at(x, y)
-    elif _IS_WIN and b == pmouse.Button.middle and _ctrl:
-        _log(f"[input] Ctrl+MiddleClick at {int(x)},{int(y)}")
-        _start_at(x, y)
+    trigger = ((_IS_MAC and b == pmouse.Button.left and _alt) or
+               (_IS_WIN and b == pmouse.Button.middle and _ctrl))
+    if trigger:
+        _log(f"[input] {'Option' if _IS_MAC else 'Ctrl'}+Click at {int(x)},{int(y)}")
+        _armed = True; _drag_button = b; _press_xy = (x, y); _dragging = False
     elif (_IS_MAC and b != pmouse.Button.left) or (_IS_WIN and b != pmouse.Button.middle):
         bus.hide_now.emit()
 
@@ -574,8 +588,6 @@ class RegionSelector(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint|Qt.WindowStaysOnTopHint|
                             Qt.Tool|Qt.WindowTransparentForInput|Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        fname = "Segoe UI" if _IS_WIN else "SF Pro Display"
-        self._badge_font = QFont(fname, 11, QFont.DemiBold)
         self._raw_a = (0,0); self._raw_b = (0,0); self._geo = None
 
     def begin(self, x, y):
@@ -590,9 +602,9 @@ class RegionSelector(QWidget):
         # Repaint only the changed strip, not the whole (often 4K) virtual screen -
         # keeps the drag feeling instant instead of redoing full-screen alpha compositing
         # on every mouse-move event.
-        dirty = self._local_rect().adjusted(-6,-30,6,6)
+        dirty = self._local_rect().adjusted(-12,-12,12,12)
         self._raw_b = (x, y)
-        dirty = dirty.united(self._local_rect().adjusted(-6,-30,6,6))
+        dirty = dirty.united(self._local_rect().adjusted(-12,-12,12,12))
         self.update(dirty)
 
     def _local(self, x, y):
@@ -610,25 +622,37 @@ class RegionSelector(QWidget):
     def paintEvent(self,_):
         if self._geo is None: return
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        p.fillRect(self.rect(), QColor(0,0,0,80))
+        p.fillRect(self.rect(), QColor(6,8,16,90))
         r = self._local_rect()
-        clear = QPainterPath(); clear.addRoundedRect(r, R, R)
+        if r.width() < 1 or r.height() < 1: return
+        rr = R+3
+        clear = QPainterPath(); clear.addRoundedRect(r, rr, rr)
         p.setCompositionMode(QPainter.CompositionMode_Clear)
         p.fillPath(clear, Qt.transparent)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
+        # soft neon glow behind the crisp edge - a few widening, fading strokes
+        for width, alpha in ((10,16),(6,28),(3,50)):
+            glow = QColor(C_AT); glow.setAlpha(alpha)
+            p.setPen(QPen(glow, width)); p.drawPath(clear)
+
         grad = QLinearGradient(r.topLeft(), r.bottomRight())
         grad.setColorAt(0, C_AT); grad.setColorAt(1, C_AB)
-        p.setPen(QPen(QBrush(grad), 2.5)); p.drawPath(clear)
+        p.setPen(QPen(QBrush(grad), 2)); p.drawPath(clear)
 
-        if r.width() > 30 and r.height() > 20:
-            label = f"{r.width()} × {r.height()}"
-            p.setFont(self._badge_font)
-            tw = p.fontMetrics().horizontalAdvance(label)
-            badge = QRect(r.left(), max(0, r.top()-26), tw+16, 20)
-            bpath = QPainterPath(); bpath.addRoundedRect(badge, 6, 6)
-            p.fillPath(bpath, C_BG); p.setPen(C_TR)
-            p.drawText(badge, Qt.AlignCenter, label)
+    def finish(self, x, y):
+        # A bound QObject method (unlike a plain function) gets its Qt signal
+        # connection auto-queued onto this widget's own thread - without that,
+        # hide()/paint state here would be touched from the pynput listener
+        # thread and the dimmed frame could get stuck on screen forever.
+        global _busy
+        self.move_to(x, y)
+        l, t, w, h = self.capture_rect()
+        self.hide()
+        if w < 8 or h < 8 or _busy:
+            return
+        _busy = True
+        threading.Thread(target=_run_region, args=(l, t, w, h), daemon=True).start()
 
 # == Autostart ================================================================
 
@@ -682,8 +706,8 @@ def _autostart_get():
 class Tray(QSystemTrayIcon):
     def __init__(self, icon, app):
         super().__init__(icon); self._app=app; self._enabled=True
-        hint = ("Option+Click word / Option+Shift+Click-drag sentence" if _IS_MAC
-                else "Ctrl+Middle Click word / Ctrl+Shift+Middle-drag sentence")
+        hint = ("Option+Click: click=word, drag=sentence" if _IS_MAC
+                else "Ctrl+Middle Click: click=word, drag=sentence")
         self.setToolTip(f"OverLex - {hint}")
         self._menu = QMenu()
 
@@ -715,41 +739,29 @@ class Tray(QSystemTrayIcon):
 # == Main =====================================================================
 
 _tray_ref = None
-_sel_ref = None
 
 def _mc_guard(x, y, b, pressed):
     if _tray_ref and not _tray_ref.enabled: return
     _mc(x, y, b, pressed)
 
-def _on_sel_end(x, y):
-    global _busy
-    sel = _sel_ref
-    sel.move_to(x, y)
-    l, t, w, h = sel.capture_rect()
-    sel.hide()
-    if w < 8 or h < 8 or _busy:
-        return
-    _busy = True
-    threading.Thread(target=_run_region, args=(l, t, w, h), daemon=True).start()
-
 def main():
-    global _tray_ref, _sel_ref
+    global _tray_ref
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv); app.setQuitOnLastWindowClosed(False)
     _tray_ref = Tray(_make_icon(), app)
     ov = Overlay(); bus.show.connect(ov.present); bus.hide_now.connect(ov.hide)
     blk = BlockOverlay(); bus.show_block.connect(blk.present); bus.hide_now.connect(blk.hide)
-    _sel_ref = RegionSelector()
-    bus.sel_start.connect(_sel_ref.begin)
-    bus.sel_move.connect(_sel_ref.move_to)
-    bus.sel_end.connect(_on_sel_end)
-    bus.sel_cancel.connect(_sel_ref.hide)
+    sel = RegionSelector()
+    bus.sel_start.connect(sel.begin)
+    bus.sel_move.connect(sel.move_to)
+    bus.sel_end.connect(sel.finish)
+    bus.sel_cancel.connect(sel.hide)
     kb = pkeyboard.Listener(on_press=_kp, on_release=_kr)
     ms = pmouse.Listener(on_move=_mm, on_click=_mc_guard)
     kb.daemon = ms.daemon = True; kb.start(); ms.start()
     _log("[main] listeners OK")
-    hint = ("Option+Click word, Option+Shift+drag sentence" if _IS_MAC
-            else "Ctrl+Middle Click word, Ctrl+Shift+Middle-drag sentence")
+    hint = ("Option+Click: click=word, drag=sentence" if _IS_MAC
+            else "Ctrl+Middle Click: click=word, drag=sentence")
     _tray_ref.showMessage("OverLex", f"{hint}.",
                           QSystemTrayIcon.Information, 3000)
     sys.exit(app.exec())

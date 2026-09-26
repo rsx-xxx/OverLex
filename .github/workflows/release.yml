@@ -15,6 +15,8 @@ jobs:
   # ── Windows EXE ─────────────────────────────────────────────────────────────
   build-windows:
     runs-on: windows-latest
+    env:
+      OVERLEX_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('0.0.{0}', github.run_number) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -27,8 +29,6 @@ jobs:
         run: pip install -r requirements.txt pyinstaller
 
       - name: Build EXE
-        env:
-          OVERLEX_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('0.0.{0}', github.run_number) }}
         run: python build_win.py
 
       - name: Smoke test OCR helper
@@ -37,7 +37,9 @@ jobs:
           $proc = Start-Process -FilePath "dist/OverLex/OverLex.exe" -PassThru
           Start-Sleep -Seconds 5
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-          $ps1 = "dist/OverLex/_ocr_helper.ps1"
+          # Written to %LOCALAPPDATA%\OverLex, not next to the EXE - a Program Files install
+          # only grants a normal user write access to their own per-user data dir.
+          $ps1 = "$Env:LOCALAPPDATA\OverLex\_ocr_helper.ps1"
           if (-not (Test-Path $ps1)) { throw "OverLex.exe did not generate $ps1" }
           python -c "from PIL import Image, ImageDraw, ImageFont; img = Image.new('RGB',(500,120),'white'); d = ImageDraw.Draw(img); f = ImageFont.truetype('arial.ttf', 48); d.text((20,30),'Hello World',fill='black',font=f); img.save('ocr_test.bmp','BMP')"
           $imgPath = (Resolve-Path "ocr_test.bmp").Path
@@ -50,12 +52,26 @@ jobs:
           Compress-Archive -Path dist/OverLex -DestinationPath dist/OverLex-Windows.zip
           (Get-FileHash dist/OverLex-Windows.zip -Algorithm SHA256).Hash | Out-File -Encoding ascii dist/OverLex-Windows.zip.sha256
 
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Null
+            $iscc = "${Env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "installer\OverLex.iss" "/DAppVersion=$Env:OVERLEX_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC.exe failed with exit code $LASTEXITCODE" }
+          (Get-FileHash dist/OverLex-Setup.exe -Algorithm SHA256).Hash | Out-File -Encoding ascii dist/OverLex-Setup.exe.sha256
+
       - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
             dist/OverLex-Windows.zip
             dist/OverLex-Windows.zip.sha256
+            dist/OverLex-Setup.exe
+            dist/OverLex-Setup.exe.sha256
 
   # ── macOS DMG ───────────────────────────────────────────────────────────────
   build-mac:
@@ -124,15 +140,21 @@ jobs:
             ## Download
             | Platform | File |
             |---|---|
-            | Windows 10/11 | `OverLex-Windows.zip` → unzip, run `OverLex.exe` |
+            | Windows 10/11 (installer, recommended) | `OverLex-Setup.exe` → run it, installs to Program Files, offers launch-at-startup |
+            | Windows 10/11 (portable, no install) | `OverLex-Windows.zip` → unzip, run `OverLex.exe` |
             | macOS 12+ (Apple Silicon) | `OverLex.dmg` → open, drag into Applications |
 
             Verify a download against `SHA256SUMS.txt` before running it.
 
+            `OverLex-Setup.exe` installs per-machine, upgrades an existing install in place
+            (same Start Menu entry, no duplicates), and closes/relaunches a running OverLex
+            automatically instead of leaving an old copy running.
+
             ## Windows SmartScreen
-            The Windows build is not code-signed (no EV certificate). On first run SmartScreen may
-            show "Windows protected your PC" — click **More info → Run anyway**. The binary is
-            unmodified from what this workflow built; you can confirm via the published checksum.
+            Neither the installer nor the EXE is code-signed (no EV certificate). On first run
+            SmartScreen may show "Windows protected your PC" — click **More info → Run anyway**.
+            The binary is unmodified from what this workflow built; you can confirm via the
+            published checksum.
 
             ## macOS Gatekeeper
             The DMG is signed with a Developer ID certificate and notarized by Apple when the
@@ -140,6 +162,7 @@ jobs:
             Gatekeeper will require **System Settings → Privacy & Security → Open Anyway**.
           files: |
             artifacts/windows/OverLex-Windows.zip
+            artifacts/windows/OverLex-Setup.exe
             artifacts/mac/OverLex.dmg
             artifacts/SHA256SUMS.txt
           draft: false

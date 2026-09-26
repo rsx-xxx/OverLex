@@ -8,8 +8,13 @@ Works over games, browsers, any application.
 
 | Platform | Link |
 |---|---|
-| Windows 10/11 | [OverLex-Windows.zip](../../releases/latest) |
+| Windows 10/11 (installer, recommended) | [OverLex-Setup.exe](../../releases/latest) |
+| Windows 10/11 (portable, no install) | [OverLex-Windows.zip](../../releases/latest) |
 | macOS 12+ (Apple Silicon) | [OverLex.dmg](../../releases/latest) |
+
+`OverLex-Setup.exe` installs to Program Files, offers a launch-at-startup checkbox, and
+upgrades an existing install in place — no duplicate Start Menu entries, and it closes/relaunches
+a running OverLex automatically instead of leaving an old copy running in the background.
 
 Each release also publishes `SHA256SUMS.txt` — verify a downloaded file against it before running.
 
@@ -24,8 +29,8 @@ publishes its own separate, permanently pinned release.
 | Windows: `Ctrl` + Middle Click | Translate the word under the cursor |
 | macOS: `Option` + Click | Translate the word under the cursor (trackpad) |
 | macOS: `Ctrl` + `Option` + `Space` | Translate the word at the current cursor position without clicking |
-| Windows: `Ctrl` + `Shift` + Middle Click, drag, release | Select a region — OCRs the whole area and translates it as one block of text (sentence mode) |
-| macOS: `Option` + `Shift` + Click, drag, release | Same, sentence mode |
+| Windows: `Ctrl` + Middle Click, **drag**, release | Select a region — OCRs the whole area and translates it as one block of text (sentence mode) |
+| macOS: `Option` + Click, **drag**, release | Same, sentence mode |
 | `Esc` while dragging | Cancel the region selection |
 | Click on the overlay | Dismiss it |
 | 5 seconds | Auto-hide |
@@ -62,9 +67,21 @@ the release workflow sets it from the pushed git tag automatically).
 
 ## Windows SmartScreen
 
-The Windows build is not code-signed (no EV certificate) — SmartScreen may show "Windows protected
-your PC" on first run. Click **More info → Run anyway**. Verify the download against
-`SHA256SUMS.txt` in the release if you want extra assurance the file wasn't tampered with.
+Neither the installer nor the EXE is code-signed (no EV certificate — those cost real money and
+this is a hobby project) — SmartScreen may show "Windows protected your PC" on first run of either
+one. Click **More info → Run anyway**. This can't be fully removed without buying a certificate;
+verify the download against `SHA256SUMS.txt` in the release if you want assurance the file wasn't
+tampered with instead.
+
+## Windows installer
+
+`OverLex-Setup.exe` (built with Inno Setup, see `installer/OverLex.iss`) installs to
+`C:\Program Files\OverLex`. Writing to Program Files needs one admin/UAC prompt during install —
+Windows has no way around that — but the installed app still runs without admin afterward, exactly
+like the portable zip. Re-running the installer over an existing install (including on every
+"latest" build) upgrades in place: same Start Menu entry, no duplicate Add/Remove Programs rows,
+and if OverLex is currently running it gets closed and the freshly installed copy relaunched
+automatically, so an update never leaves an old process behind.
 
 ## macOS release signing
 
