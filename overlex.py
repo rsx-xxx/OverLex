@@ -344,7 +344,7 @@ def _mc(x, y, b, pressed):
     trigger = ((_IS_MAC and b == pmouse.Button.left and _alt) or
                (_IS_WIN and b == pmouse.Button.middle and _ctrl))
     if trigger:
-        _log(f"[input] {'Option' if _IS_MAC else 'Ctrl'}+Click at {int(x)},{int(y)}")
+        _log(f"[input] {'Option' if _IS_MAC else 'Ctrl'}+Click at {int(x)},{int(y)}, hiding any visible popup")
         # Clear whatever's currently on screen the instant a new gesture starts,
         # so a slow/failed new request can never look like "stuck on the old
         # answer" - the old one is gone immediately regardless of what happens next.
@@ -560,6 +560,7 @@ class Overlay(QWidget):
         self._text = ""; self._font = QFont("Segoe UI",20,QFont.Bold)
 
     def present(self, sx, sy, word):
+        _log(f"[overlay] present() applying word={word!r}")
         sx, sy = _phys_to_logical(sx, sy)
         self._text = word
         fname = "Segoe UI" if _IS_WIN else "SF Pro Display"
@@ -572,6 +573,10 @@ class Overlay(QWidget):
         w = min(fm.horizontalAdvance(word)+PAD_H*2+ABAR+6, OW)
         h = fm.height()+PAD_V*2
         self.setFixedSize(w,h); self._place(sx,sy)
+        # See BlockOverlay.present() for why this repaint happens before
+        # show()/raise() - forces the new text to be painted before the
+        # window is made visible again, so a stale frame can't flash.
+        self.repaint()
         self.show(); self.raise_()
         try: _grab_focus(int(self.winId()))
         except: pass
@@ -610,6 +615,7 @@ class BlockOverlay(QWidget):
         self._label.setAlignment(Qt.AlignLeft|Qt.AlignTop)
 
     def present(self, sx, sy, text):
+        _log(f"[block] present() applying text={text!r}")
         sx, sy = _phys_to_logical(sx, sy)
         maxw = BW-PAD_H*2-ABAR-6
         self._label.setFixedWidth(maxw)
@@ -619,6 +625,12 @@ class BlockOverlay(QWidget):
         h = min(self._label.height()+PAD_V*2, MAX_BH)
         self.setFixedSize(w,h); self._label.move(ABAR+PAD_H,PAD_V)
         _place_near(self, sx, sy)
+        # Force the new text to actually be painted now (synchronously), before
+        # show()/raise() make the window visible again - otherwise a widget
+        # that's being re-shown very soon after a previous present() can have
+        # its repaint scheduled but not yet processed, and the compositor can
+        # briefly present the OLD frame's pixels on the first shown frame.
+        self._label.repaint(); self.repaint()
         self.show(); self.raise_()
         try: _grab_focus(int(self.winId()))
         except: pass
