@@ -57,14 +57,12 @@ jobs:
           }
           & $iscc "installer\OverLex.iss" "/DAppVersion=$Env:OVERLEX_VERSION"
           if ($LASTEXITCODE -ne 0) { throw "ISCC.exe failed with exit code $LASTEXITCODE" }
-          (Get-FileHash dist/OverLex-Setup.exe -Algorithm SHA256).Hash | Out-File -Encoding ascii dist/OverLex-Setup.exe.sha256
 
       - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
             dist/OverLex-Setup.exe
-            dist/OverLex-Setup.exe.sha256
 
   # ── macOS DMG ───────────────────────────────────────────────────────────────
   build-mac:
@@ -93,7 +91,6 @@ jobs:
           name: mac
           path: |
             dist/OverLex.dmg
-            dist/OverLex.dmg.sha256
 
   # ── GitHub Release ───────────────────────────────────────────────────────────
   # Tag pushes (v*) get their own versioned release. Everything else (main pushes,
@@ -116,9 +113,6 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
-
-      - name: Combine checksums
-        run: cat artifacts/windows/*.sha256 artifacts/mac/*.sha256 > artifacts/SHA256SUMS.txt
 
       - name: Remove retired assets from an existing release
         # softprops/action-gh-release only adds/updates files it's given - an asset
@@ -146,8 +140,6 @@ jobs:
             | Windows 10/11 | `OverLex-Setup.exe` → run it, installs to Program Files, offers launch-at-startup |
             | macOS 12+ (Apple Silicon) | `OverLex.dmg` → open, drag into Applications |
 
-            Verify a download against `SHA256SUMS.txt` before running it.
-
             `OverLex-Setup.exe` installs per-machine, upgrades an existing install in place
             (same Start Menu entry, no duplicates), and closes/relaunches a running OverLex
             automatically instead of leaving an old copy running.
@@ -155,8 +147,6 @@ jobs:
             ## Windows SmartScreen
             Neither the installer nor the EXE is code-signed (no EV certificate). On first run
             SmartScreen may show "Windows protected your PC" — click **More info → Run anyway**.
-            The binary is unmodified from what this workflow built; you can confirm via the
-            published checksum.
 
             ## macOS Gatekeeper
             The DMG is signed with a Developer ID certificate and notarized by Apple when the
@@ -165,7 +155,6 @@ jobs:
           files: |
             artifacts/windows/OverLex-Setup.exe
             artifacts/mac/OverLex.dmg
-            artifacts/SHA256SUMS.txt
           draft: false
           prerelease: false
           # GitHub's /releases/latest picks whichever release has the newest created_at,

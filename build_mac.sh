@@ -181,7 +181,5 @@ else
   echo "[notary] skipped; set APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD to notarize"
 fi
 
-shasum -a 256 dist/OverLex.dmg > dist/OverLex.dmg.sha256
-
 SIZE=$(du -sh dist/OverLex.dmg | cut -f1)
 echo "[OK] dist/OverLex.dmg ($SIZE)"

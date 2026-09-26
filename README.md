@@ -12,8 +12,7 @@ games, browsers, any application, no copy-paste needed.
 
 The installer isn't code-signed (that costs money this hobby project doesn't spend), so Windows
 SmartScreen and macOS Gatekeeper will warn on first run — click through (**More info → Run
-anyway** / **Open Anyway** in System Settings → Privacy & Security). Verify the download against
-the release's `SHA256SUMS.txt` if you want assurance it wasn't tampered with.
+anyway** / **Open Anyway** in System Settings → Privacy & Security).
 
 ## Usage
 
