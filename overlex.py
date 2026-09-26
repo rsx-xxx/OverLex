@@ -345,6 +345,10 @@ def _mc(x, y, b, pressed):
                (_IS_WIN and b == pmouse.Button.middle and _ctrl))
     if trigger:
         _log(f"[input] {'Option' if _IS_MAC else 'Ctrl'}+Click at {int(x)},{int(y)}")
+        # Clear whatever's currently on screen the instant a new gesture starts,
+        # so a slow/failed new request can never look like "stuck on the old
+        # answer" - the old one is gone immediately regardless of what happens next.
+        bus.hide_now.emit()
         _armed = True; _drag_button = b; _press_xy = (x, y); _dragging = False
     elif (_IS_MAC and b != pmouse.Button.left) or (_IS_WIN and b != pmouse.Button.middle):
         bus.hide_now.emit()
@@ -434,6 +438,7 @@ def _run(x, y, gen):
 
 def _run_region(l, t, w, h, gen):
     try:
+        _log(f"[region] gen={gen} capture rect=({l},{t},{w},{h})")
         with mss.MSS() as sct:
             raw = sct.grab({"left": l, "top": t, "width": w, "height": h})
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
@@ -444,17 +449,20 @@ def _run_region(l, t, w, h, gen):
 
         rows = _ocr(img)
         text = _group_text(rows)
-        if gen != _gen: return  # superseded by a newer selection while OCR was running
+        _log(f"[region] gen={gen} ocr rows={len(rows)} grouped={text!r}")
+        if gen != _gen:
+            _log(f"[region] gen={gen} superseded by gen={_gen} after OCR"); return
         if not text.strip():
             bus.hide_now.emit(); return
 
         flat = re.sub(r"\s*\n\s*", " ", text).strip()
         result = _tr(flat)
-        if gen != _gen: return  # superseded while translating
-        _log(f"[region] {flat!r} -> {result!r}")
+        if gen != _gen:
+            _log(f"[region] gen={gen} superseded by gen={_gen} after translate"); return
+        _log(f"[region] gen={gen} {flat!r} -> {result!r}")
         bus.show_block.emit(l + w//2, t + h, result)
     except Exception as e:
-        _log(f"[region] {e}"); import traceback; _log(traceback.format_exc())
+        _log(f"[region] gen={gen} {e}"); import traceback; _log(traceback.format_exc())
         if gen == _gen: bus.hide_now.emit()
 
 # == Focus ====================================================================
