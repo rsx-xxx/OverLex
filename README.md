@@ -24,9 +24,15 @@ publishes its own separate, permanently pinned release.
 | Windows: `Ctrl` + Middle Click | Translate the word under the cursor |
 | macOS: `Option` + Click | Translate the word under the cursor (trackpad) |
 | macOS: `Ctrl` + `Option` + `Space` | Translate the word at the current cursor position without clicking |
+| Windows: `Ctrl` + `Shift` + Middle Click, drag, release | Select a region — OCRs the whole area and translates it as one block of text (sentence mode) |
+| macOS: `Option` + `Shift` + Click, drag, release | Same, sentence mode |
+| `Esc` while dragging | Cancel the region selection |
 | Click on the overlay | Dismiss it |
 | 5 seconds | Auto-hide |
 | Tray icon | Pause / Launch at login / Quit |
+
+Sentence mode reflows the recognized lines into a single block before translating, so it
+reads as one continuous sentence/paragraph instead of being translated word by word.
 
 ## Install from source
 
