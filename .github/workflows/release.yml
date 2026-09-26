@@ -120,6 +120,16 @@ jobs:
       - name: Combine checksums
         run: cat artifacts/windows/*.sha256 artifacts/mac/*.sha256 > artifacts/SHA256SUMS.txt
 
+      - name: Remove retired assets from an existing release
+        # softprops/action-gh-release only adds/updates files it's given - an asset
+        # dropped from the files: list below (like the old portable zip) stays
+        # attached forever otherwise, since this updates the same release in place.
+        run: |
+          gh release delete-asset "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}" \
+            OverLex-Windows.zip --yes --repo "${{ github.repository }}" || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
