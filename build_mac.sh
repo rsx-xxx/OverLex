@@ -84,6 +84,7 @@ OVERLEX_VERSION="${OVERLEX_VERSION#v}"
   --icon build/icon.icns \
   --collect-all PIL --collect-all mss \
   --collect-all pynput \
+  --collect-all httpx --collect-all h2 \
   --add-binary "build/_ocr_helper_bin:." \
   --hidden-import pynput.keyboard._darwin \
   --hidden-import pynput.mouse._darwin \

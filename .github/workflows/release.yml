@@ -144,3 +144,7 @@ jobs:
             artifacts/SHA256SUMS.txt
           draft: false
           prerelease: false
+          # GitHub's /releases/latest picks whichever release has the newest created_at,
+          # NOT whichever is tagged "latest" - without this, an older v* tag release keeps
+          # the "Latest" badge forever and /releases/latest silently serves a stale build.
+          make_latest: true

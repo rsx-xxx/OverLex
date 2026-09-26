@@ -10,7 +10,7 @@ macOS:   Swift / Vision.framework
 import os, sys, re, threading, signal, io, platform, tempfile
 from pathlib import Path
 from collections import OrderedDict
-import urllib.request, urllib.parse, json as _json
+import httpx
 
 import mss
 from PIL import Image, ImageEnhance
@@ -28,12 +28,16 @@ _log(f"[OverLex] start | {platform.system()} {platform.release()}")
 
 CAPTURE_W, CAPTURE_H = 900, 180
 OCR_SCALE  = 2
+OCR_UPSCALE_MAX_SIDE = 500  # skip the 2x upscale/enhance pass above this size - already legible, and it's pure wasted CPU on big sentence-mode regions
 HIDE_MS    = 5000
 SRC, DST   = "en", "ru"
 HIT_PAD    = 20
 CACHE_MAX  = 500
 APP_NAME   = "OverLex"
 _TR_URL    = "https://translate.googleapis.com/translate_a/single"
+# One keep-alive HTTP/2 connection reused for every translate call instead of a fresh
+# TCP+TLS handshake per word - the handshake was the dominant cost for short requests.
+_http = httpx.Client(http2=True, timeout=4.0, headers={"User-Agent": "Mozilla/5.0"})
 
 # == OCR ======================================================================
 
@@ -191,7 +195,7 @@ _log("[OverLex] OCR ready")
 from PySide6.QtWidgets import (QApplication, QWidget, QGraphicsDropShadowEffect,
                              QSystemTrayIcon, QMenu, QLabel)
 from PySide6.QtCore   import Qt, QTimer, Signal, QObject, QPoint, QRect
-from PySide6.QtGui    import (QFont, QColor, QPainter, QPainterPath, QPen,
+from PySide6.QtGui    import (QFont, QColor, QPainter, QPainterPath, QPen, QBrush,
                              QLinearGradient, QFontMetrics, QIcon, QPixmap,
                              QAction)
 
@@ -212,11 +216,8 @@ def _tr(text):
     k = text.lower().strip()
     if k in _cache: _cache.move_to_end(k); return _cache[k]
     try:
-        params = urllib.parse.urlencode({"client":"gtx","sl":SRC,"tl":DST,"dt":"t","q":text})
-        req = urllib.request.Request(f"{_TR_URL}?{params}",
-                                     headers={"User-Agent":"Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = _json.loads(resp.read())
+        resp = _http.get(_TR_URL, params={"client":"gtx","sl":SRC,"tl":DST,"dt":"t","q":text})
+        data = resp.json()
         result = "".join(s[0] for s in data[0] if s[0]) if data[0] else text
     except Exception as e:
         _log(f"[tr] {e}"); result = text
@@ -390,9 +391,10 @@ def _run_region(l, t, w, h):
         with mss.MSS() as sct:
             raw = sct.grab({"left": l, "top": t, "width": w, "height": h})
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-        img = img.resize((img.width*OCR_SCALE, img.height*OCR_SCALE), Image.LANCZOS)
-        img = ImageEnhance.Contrast(img).enhance(2.0)
-        img = ImageEnhance.Sharpness(img).enhance(1.5)
+        if max(img.width, img.height) <= OCR_UPSCALE_MAX_SIDE:
+            img = img.resize((img.width*OCR_SCALE, img.height*OCR_SCALE), Image.LANCZOS)
+            img = ImageEnhance.Contrast(img).enhance(2.0)
+            img = ImageEnhance.Sharpness(img).enhance(1.5)
 
         rows = _ocr(img)
         text = _group_text(rows)
@@ -572,6 +574,8 @@ class RegionSelector(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint|Qt.WindowStaysOnTopHint|
                             Qt.Tool|Qt.WindowTransparentForInput|Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        fname = "Segoe UI" if _IS_WIN else "SF Pro Display"
+        self._badge_font = QFont(fname, 11, QFont.DemiBold)
         self._raw_a = (0,0); self._raw_b = (0,0); self._geo = None
 
     def begin(self, x, y):
@@ -583,12 +587,20 @@ class RegionSelector(QWidget):
         self.show(); self.raise_(); self.update()
 
     def move_to(self, x, y):
+        # Repaint only the changed strip, not the whole (often 4K) virtual screen -
+        # keeps the drag feeling instant instead of redoing full-screen alpha compositing
+        # on every mouse-move event.
+        dirty = self._local_rect().adjusted(-6,-30,6,6)
         self._raw_b = (x, y)
-        self.update()
+        dirty = dirty.united(self._local_rect().adjusted(-6,-30,6,6))
+        self.update(dirty)
 
     def _local(self, x, y):
         lx, ly = _phys_to_logical(x, y)
         return QPoint(int(lx-self._geo.left()), int(ly-self._geo.top()))
+
+    def _local_rect(self):
+        return QRect(self._local(*self._raw_a), self._local(*self._raw_b)).normalized()
 
     def capture_rect(self):
         (ax,ay),(bx,by) = self._raw_a, self._raw_b
@@ -598,12 +610,25 @@ class RegionSelector(QWidget):
     def paintEvent(self,_):
         if self._geo is None: return
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        p.fillRect(self.rect(), QColor(0,0,0,70))
-        r = QRect(self._local(*self._raw_a), self._local(*self._raw_b)).normalized()
+        p.fillRect(self.rect(), QColor(0,0,0,80))
+        r = self._local_rect()
+        clear = QPainterPath(); clear.addRoundedRect(r, R, R)
         p.setCompositionMode(QPainter.CompositionMode_Clear)
-        p.fillRect(r, Qt.transparent)
+        p.fillPath(clear, Qt.transparent)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
-        p.setPen(QPen(C_AT, 2)); p.drawRect(r.adjusted(0,0,-1,-1))
+
+        grad = QLinearGradient(r.topLeft(), r.bottomRight())
+        grad.setColorAt(0, C_AT); grad.setColorAt(1, C_AB)
+        p.setPen(QPen(QBrush(grad), 2.5)); p.drawPath(clear)
+
+        if r.width() > 30 and r.height() > 20:
+            label = f"{r.width()} × {r.height()}"
+            p.setFont(self._badge_font)
+            tw = p.fontMetrics().horizontalAdvance(label)
+            badge = QRect(r.left(), max(0, r.top()-26), tw+16, 20)
+            bpath = QPainterPath(); bpath.addRoundedRect(badge, 6, 6)
+            p.fillPath(bpath, C_BG); p.setPen(C_TR)
+            p.drawText(badge, Qt.AlignCenter, label)
 
 # == Autostart ================================================================
 
