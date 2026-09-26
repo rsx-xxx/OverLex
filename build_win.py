@@ -25,6 +25,7 @@ COLLECT = ["PIL", "mss", "pynput", "httpx", "h2"]
 HIDDEN = [
     "pynput.keyboard._win32", "pynput.mouse._win32",
     "pynput.keyboard._base", "pynput.mouse._base", "winreg",
+    "tools.gen_icon",
 ]
 
 

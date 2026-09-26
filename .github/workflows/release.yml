@@ -47,11 +47,6 @@ jobs:
           Write-Output $out
           if (-not ($out -match "Hello")) { throw "OCR smoke test did not recognize the test image. Output: $out" }
 
-      - name: Package zip + checksum
-        run: |
-          Compress-Archive -Path dist/OverLex -DestinationPath dist/OverLex-Windows.zip
-          (Get-FileHash dist/OverLex-Windows.zip -Algorithm SHA256).Hash | Out-File -Encoding ascii dist/OverLex-Windows.zip.sha256
-
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
@@ -68,8 +63,6 @@ jobs:
         with:
           name: windows
           path: |
-            dist/OverLex-Windows.zip
-            dist/OverLex-Windows.zip.sha256
             dist/OverLex-Setup.exe
             dist/OverLex-Setup.exe.sha256
 
@@ -140,8 +133,7 @@ jobs:
             ## Download
             | Platform | File |
             |---|---|
-            | Windows 10/11 (installer, recommended) | `OverLex-Setup.exe` → run it, installs to Program Files, offers launch-at-startup |
-            | Windows 10/11 (portable, no install) | `OverLex-Windows.zip` → unzip, run `OverLex.exe` |
+            | Windows 10/11 | `OverLex-Setup.exe` → run it, installs to Program Files, offers launch-at-startup |
             | macOS 12+ (Apple Silicon) | `OverLex.dmg` → open, drag into Applications |
 
             Verify a download against `SHA256SUMS.txt` before running it.
@@ -161,7 +153,6 @@ jobs:
             repository has signing secrets configured; otherwise it is ad-hoc signed only, and
             Gatekeeper will require **System Settings → Privacy & Security → Open Anyway**.
           files: |
-            artifacts/windows/OverLex-Windows.zip
             artifacts/windows/OverLex-Setup.exe
             artifacts/mac/OverLex.dmg
             artifacts/SHA256SUMS.txt

@@ -88,6 +88,7 @@ OVERLEX_VERSION="${OVERLEX_VERSION#v}"
   --add-binary "build/_ocr_helper_bin:." \
   --hidden-import pynput.keyboard._darwin \
   --hidden-import pynput.mouse._darwin \
+  --hidden-import tools.gen_icon \
   $EXCL_FLAGS \
   overlex.py
 

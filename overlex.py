@@ -7,7 +7,7 @@ translate it as one block of text.
 Windows: PowerShell / Windows.Media.Ocr
 macOS:   Swift / Vision.framework
 """
-import os, sys, re, threading, signal, io, platform, tempfile
+import os, sys, re, ssl, time, threading, signal, io, platform, tempfile
 from pathlib import Path
 from collections import OrderedDict
 import httpx
@@ -51,7 +51,12 @@ APP_NAME   = "OverLex"
 _TR_URL    = "https://translate.googleapis.com/translate_a/single"
 # One keep-alive HTTP/2 connection reused for every translate call instead of a fresh
 # TCP+TLS handshake per word - the handshake was the dominant cost for short requests.
-_http = httpx.Client(http2=True, timeout=4.0, headers={"User-Agent": "Mozilla/5.0"})
+# verify= is explicit (not httpx's default) because httpx otherwise trusts only its
+# bundled certifi CA list, not the OS certificate store - unlike the old urllib-based
+# code, it would silently fail TLS verification behind any TLS-inspecting corporate
+# proxy/VPN/antivirus whose root cert Windows already trusts.
+_http = httpx.Client(http2=True, timeout=4.0, headers={"User-Agent": "Mozilla/5.0"},
+                     verify=ssl.create_default_context())
 
 # == OCR ======================================================================
 
@@ -226,15 +231,24 @@ bus = _Bus()
 # == Translation ==============================================================
 
 _cache: OrderedDict = OrderedDict()
+def _tr_once(text):
+    resp = _http.get(_TR_URL, params={"client":"gtx","sl":SRC,"tl":DST,"dt":"t","q":text})
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]!r}")
+    data = resp.json()
+    return "".join(s[0] for s in data[0] if s[0]) if data[0] else text
+
 def _tr(text):
     k = text.lower().strip()
     if k in _cache: _cache.move_to_end(k); return _cache[k]
-    try:
-        resp = _http.get(_TR_URL, params={"client":"gtx","sl":SRC,"tl":DST,"dt":"t","q":text})
-        data = resp.json()
-        result = "".join(s[0] for s in data[0] if s[0]) if data[0] else text
-    except Exception as e:
-        _log(f"[tr] {e}"); result = text
+    result = text
+    for attempt in (1, 2):
+        try:
+            result = _tr_once(text)
+            break
+        except Exception as e:
+            _log(f"[tr] attempt {attempt} failed: {e}")
+            if attempt == 1: time.sleep(0.4)
     _cache[k] = result
     if len(_cache) > CACHE_MAX: _cache.popitem(last=False)
     return result
@@ -440,15 +454,13 @@ def _grab_focus(hwnd):
 # == Icon =====================================================================
 
 def _make_icon(size=64):
-    px = QPixmap(size,size); px.fill(Qt.transparent)
-    p = QPainter(px); p.setRenderHint(QPainter.Antialiasing)
-    g = QLinearGradient(0,0,size,size)
-    g.setColorAt(0,QColor(48,130,255)); g.setColorAt(1,QColor(110,65,250))
-    path = QPainterPath(); path.addEllipse(2,2,size-4,size-4)
-    p.fillPath(path,g)
-    p.setPen(QColor(255,255,255))
-    p.setFont(QFont("Segoe UI" if _IS_WIN else "SF Pro Display", int(size*.38), QFont.Bold))
-    p.drawText(px.rect(), Qt.AlignCenter, "OL"); p.end()
+    # Reuses the same squircle+A/Я design tools/gen_icon.py bakes into the
+    # installed .ico/.icns, instead of maintaining a second, drifting QPainter
+    # re-implementation of the same icon.
+    from tools.gen_icon import render as _render_icon
+    img = _render_icon(size).convert("RGBA")
+    buf = io.BytesIO(); img.save(buf, "PNG")
+    px = QPixmap(); px.loadFromData(buf.getvalue())
     return QIcon(px)
 
 # == Overlay ==================================================================

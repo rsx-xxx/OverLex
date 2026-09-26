@@ -8,8 +8,7 @@ Works over games, browsers, any application.
 
 | Platform | Link |
 |---|---|
-| Windows 10/11 (installer, recommended) | [OverLex-Setup.exe](../../releases/latest) |
-| Windows 10/11 (portable, no install) | [OverLex-Windows.zip](../../releases/latest) |
+| Windows 10/11 | [OverLex-Setup.exe](../../releases/latest) |
 | macOS 12+ (Apple Silicon) | [OverLex.dmg](../../releases/latest) |
 
 `OverLex-Setup.exe` installs to Program Files, offers a launch-at-startup checkbox, and
@@ -77,8 +76,8 @@ tampered with instead.
 
 `OverLex-Setup.exe` (built with Inno Setup, see `installer/OverLex.iss`) installs to
 `C:\Program Files\OverLex`. Writing to Program Files needs one admin/UAC prompt during install —
-Windows has no way around that — but the installed app still runs without admin afterward, exactly
-like the portable zip. Re-running the installer over an existing install (including on every
+Windows has no way around that — but the installed app still runs without admin afterward.
+Re-running the installer over an existing install (including on every
 "latest" build) upgrades in place: same Start Menu entry, no duplicate Add/Remove Programs rows,
 and if OverLex is currently running it gets closed and the freshly installed copy relaunched
 automatically, so an update never leaves an old process behind.
