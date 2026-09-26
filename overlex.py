@@ -7,10 +7,10 @@ translate it as one block of text.
 Windows: PowerShell / Windows.Media.Ocr
 macOS:   Swift / Vision.framework
 """
-import os, sys, re, ssl, time, threading, signal, io, platform, tempfile
+import os, sys, re, time, threading, signal, io, platform, tempfile
 from pathlib import Path
 from collections import OrderedDict
-import httpx
+import urllib.request, urllib.parse, json as _json
 
 import mss
 from PIL import Image, ImageEnhance
@@ -49,14 +49,7 @@ HIT_PAD    = 20
 CACHE_MAX  = 500
 APP_NAME   = "OverLex"
 _TR_URL    = "https://translate.googleapis.com/translate_a/single"
-# One keep-alive HTTP/2 connection reused for every translate call instead of a fresh
-# TCP+TLS handshake per word - the handshake was the dominant cost for short requests.
-# verify= is explicit (not httpx's default) because httpx otherwise trusts only its
-# bundled certifi CA list, not the OS certificate store - unlike the old urllib-based
-# code, it would silently fail TLS verification behind any TLS-inspecting corporate
-# proxy/VPN/antivirus whose root cert Windows already trusts.
-_http = httpx.Client(http2=True, timeout=4.0, headers={"User-Agent": "Mozilla/5.0"},
-                     verify=ssl.create_default_context())
+_TR_URL_FALLBACK = "https://api.mymemory.translated.net/get"
 
 # == OCR ======================================================================
 
@@ -231,24 +224,41 @@ bus = _Bus()
 # == Translation ==============================================================
 
 _cache: OrderedDict = OrderedDict()
-def _tr_once(text):
-    resp = _http.get(_TR_URL, params={"client":"gtx","sl":SRC,"tl":DST,"dt":"t","q":text})
-    if resp.status_code != 200:
-        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]!r}")
-    data = resp.json()
+
+def _get_json(url, params):
+    q = urllib.parse.urlencode(params)
+    req = urllib.request.Request(f"{url}?{q}", headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=4) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"HTTP {resp.status}")
+        return _json.loads(resp.read())
+
+def _tr_google(text):
+    data = _get_json(_TR_URL, {"client":"gtx","sl":SRC,"tl":DST,"dt":"t","q":text})
     return "".join(s[0] for s in data[0] if s[0]) if data[0] else text
+
+def _tr_fallback(text):
+    # Independent provider/quota from Google's endpoint above - covers the case
+    # where that endpoint is rate-limited (observed directly during development:
+    # repeated testing got it to return 429) rather than genuinely down.
+    data = _get_json(_TR_URL_FALLBACK, {"q": text, "langpair": f"{SRC}|{DST}"})
+    if data.get("responseStatus") != 200 or data.get("quotaFinished"):
+        raise RuntimeError(f"fallback provider exhausted: {data.get('responseDetails')}")
+    out = (data.get("responseData") or {}).get("translatedText")
+    if not out: raise RuntimeError("fallback provider returned no translation")
+    return out
 
 def _tr(text):
     k = text.lower().strip()
     if k in _cache: _cache.move_to_end(k); return _cache[k]
     result = text
-    for attempt in (1, 2):
+    for name, fn in (("google", _tr_google), ("google-retry", _tr_google), ("fallback", _tr_fallback)):
         try:
-            result = _tr_once(text)
+            result = fn(text)
             break
         except Exception as e:
-            _log(f"[tr] attempt {attempt} failed: {e}")
-            if attempt == 1: time.sleep(0.4)
+            _log(f"[tr] {name} failed: {e}")
+            if name == "google": time.sleep(0.4)
     _cache[k] = result
     if len(_cache) > CACHE_MAX: _cache.popitem(last=False)
     return result

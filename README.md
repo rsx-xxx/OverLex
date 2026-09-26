@@ -38,6 +38,13 @@ publishes its own separate, permanently pinned release.
 Sentence mode reflows the recognized lines into a single block before translating, so it
 reads as one continuous sentence/paragraph instead of being translated word by word.
 
+Translation calls Google's free (unofficial, no API key) endpoint first, retrying once, then
+falls back to MyMemory's free API if that's unavailable or rate-limited — the two have
+independent quotas, so one being throttled doesn't take translation down entirely. If it ever
+just shows the original text back, check `overlex.log` (`%LOCALAPPDATA%\OverLex\` on Windows,
+`~/Library/Application Support/OverLex/` on macOS) for the `[tr] ... failed: ...` line explaining
+why.
+
 ## Install from source
 
 ```bash

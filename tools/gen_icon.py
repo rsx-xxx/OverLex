@@ -2,29 +2,22 @@
 """Renders the OverLex app icon to a PNG, for build-time packaging into a
 Windows .ico / macOS .icns, and for the runtime tray icon.
 
-Squircle tile (matches modern Windows 11 / macOS app-icon conventions) with
-an overlapping A/Я monogram - the same "two overlapping language glyphs"
-grammar as Google Translate's icon, specialized to this app's EN->RU pair.
+Squircle tile (matches modern Windows 11 / macOS app-icon conventions) depicting
+the app's actual mechanic instead of a generic language monogram: a viewfinder/
+selection frame (four corner brackets, echoing the in-app region-select frame)
+around a small caption pill (echoing the translated-text overlay that appears).
+Select-a-region-of-screen -> get-a-translated-caption is what makes this app
+different from any other translator, so the icon shows exactly that, not a
+generic "two letters" translate-app trope.
 
 Usage: python tools/gen_icon.py <out.png> [size]
 """
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
-_BOLD_FONTS = ("Arial Bold.ttf", "arialbd.ttf", "Arial-BoldMT.ttf", "DejaVuSans-Bold.ttf")
+from PIL import Image, ImageDraw, ImageFilter
 
 C_TOP, C_BOTTOM = (48, 130, 255), (110, 65, 250)
-
-
-def _bold_font(size: int) -> ImageFont.FreeTypeFont:
-    for name in _BOLD_FONTS:
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
 
 
 def _diagonal_gradient(size: int, _n: int = 48) -> Image.Image:
@@ -63,30 +56,42 @@ def render(size: int) -> Image.Image:
     glass.putalpha(highlight)
     img = Image.alpha_composite(img, Image.composite(glass, Image.new("RGBA", (size, size), (0,0,0,0)), mask))
 
-    def glyph_layer(text, font, cx, cy, alpha):
-        # ImageDraw.text with a semi-transparent fill doesn't blend against the
-        # destination - it just stores raw white RGB with a lowered alpha,
-        # discarding whatever gradient color was underneath. Drawing solid onto
-        # its own layer and alpha_composite-ing that in blends it properly.
-        layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        d = ImageDraw.Draw(layer)
-        bbox = d.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x, y = cx - tw / 2 - bbox[0], cy - th / 2 - bbox[1]
-        d.text((x, y), text, font=font, fill=(255, 255, 255, 255))
-        if alpha < 255:
-            r, g, b, a = layer.split()
-            layer = Image.merge("RGBA", (r, g, b, a.point(lambda v: v * alpha // 255)))
-        return layer
+    glyph = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glyph)
 
-    # Background glyph: muted "A" (source language), upper-left.
-    f_back = _bold_font(int(size * 0.40))
-    img = Image.alpha_composite(img, glyph_layer("A", f_back, size * 0.30, size * 0.38, 150))
+    stroke = size * 0.075
+    arm = size * 0.19
+    inset = size * 0.19
+    corners = [
+        (inset, inset, 1, 1),                      # top-left, arms point right/down
+        (size - inset, inset, -1, 1),               # top-right, arms point left/down
+        (inset, size - inset, 1, -1),               # bottom-left, arms point right/up
+        (size - inset, size - inset, -1, -1),       # bottom-right, arms point left/up
+    ]
+    for cx, cy, dx, dy in corners:
+        gd.line([(cx, cy), (cx + dx * arm, cy)], fill=(255, 255, 255, 255), width=int(stroke))
+        gd.line([(cx, cy), (cx, cy + dy * arm)], fill=(255, 255, 255, 255), width=int(stroke))
+        for px, py in ((cx, cy), (cx + dx * arm, cy), (cx, cy + dy * arm)):
+            r = stroke / 2
+            gd.ellipse([px - r, py - r, px + r, py + r], fill=(255, 255, 255, 255))
 
-    # Foreground glyph: solid "Я" (target language), lower-right, overlapping.
-    f_front = _bold_font(int(size * 0.46))
-    img = Image.alpha_composite(img, glyph_layer("Я", f_front, size * 0.62, size * 0.64, 255))
+    # Caption pill: echoes the translated-text overlay the app actually shows,
+    # sitting where a real result would appear inside the selected frame.
+    pill_w, pill_h = size * 0.40, size * 0.155
+    pill_cx, pill_cy = size * 0.5, size * 0.635
+    pill_box = [pill_cx - pill_w / 2, pill_cy - pill_h / 2, pill_cx + pill_w / 2, pill_cy + pill_h / 2]
+    gd.rounded_rectangle(pill_box, radius=pill_h / 2, fill=(255, 255, 255, 255))
 
+    # Tiny accent dashes inside the pill, standing in for illegible micro-text -
+    # dark enough to read against the white pill without trying to render real letters.
+    dash_y = pill_cy
+    dash_h = pill_h * 0.22
+    for dx0, dw in ((-0.28, 0.22), (-0.02, 0.30), (0.32, 0.16)):
+        x0 = pill_cx + dx0 * pill_w
+        gd.rounded_rectangle([x0, dash_y - dash_h / 2, x0 + dw * pill_w, dash_y + dash_h / 2],
+                              radius=dash_h / 2, fill=(90, 70, 200, 255))
+
+    img = Image.alpha_composite(img, glyph)
     return img
 
 
