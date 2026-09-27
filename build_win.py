@@ -76,7 +76,10 @@ if __name__ == "__main__":
     version_file = build_dir / "version_info.txt"
     _write_version_file(version_file, version)
 
-    flags = ["--icon", str(icon_ico), "--version-file", str(version_file)]
+    flags = ["--icon", str(icon_ico), "--version-file", str(version_file),
+              # tools/gen_icon.py loads this at runtime for the tray icon - PyInstaller
+              # only bundles Python modules automatically, not arbitrary data files.
+              "--add-data", f"{ROOT / 'tools' / 'assets' / 'icon_master.png'};tools/assets"]
     for p in COLLECT: flags += ["--collect-all", p]
     for h in HIDDEN: flags += ["--hidden-import", h]
     for e in EXCLUDE: flags += ["--exclude-module", e]

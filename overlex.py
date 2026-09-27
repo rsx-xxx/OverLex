@@ -484,6 +484,24 @@ def _grab_focus(hwnd):
         subprocess.Popen(["osascript", "-e",
             'tell app "System Events" to set frontmost of first process whose frontmost is true to false'])
 
+def _mac_accessibility_trusted():
+    # pynput's global mouse/keyboard hooks need Accessibility permission on
+    # macOS. Without it they silently receive nothing - no error, no crash,
+    # just a tray icon that does nothing when clicked/dragged on. Every
+    # unsigned/ad-hoc-signed rebuild of this app is a *different* app as far
+    # as macOS's permission database is concerned, so a grant made for an
+    # older build doesn't carry over to a new one - this is expected to
+    # happen again on every future update until the app is properly signed.
+    try:
+        import ctypes
+        lib = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+        lib.AXIsProcessTrusted.restype = ctypes.c_bool
+        return bool(lib.AXIsProcessTrusted())
+    except Exception as e:
+        _log(f"[permissions] AXIsProcessTrusted check failed: {e}")
+        return True  # fail open - don't nag if we can't even check
+
 # == Icon =====================================================================
 
 def _make_icon(size=64):
@@ -501,11 +519,29 @@ def _make_icon(size=64):
 OW=320; PAD_H=24; PAD_V=14; ABAR=3; R=12
 BW=440; MAX_BH=360  # block (sentence-mode) overlay: wider, taller, word-wrapped
 C_BG  = QColor(8,10,20,165)
-# Same OKLCH-derived blue/violet the app icon uses (tools/gen_icon.py) - one
-# scientifically-picked palette shared by the icon, the word popup, and the
-# region-select frame instead of three separately hand-picked ones.
-from tools.gen_icon import C_TOP as _C_TOP, C_BOTTOM as _C_BOTTOM
-C_AT  = QColor(*_C_TOP); C_AB = QColor(*_C_BOTTOM)
+# UI accent gradient (word popup bar, region-select frame glow): OKLCH keeps
+# lightness/chroma constant while sweeping hue, so the gradient stays equally
+# vivid start to end instead of dipping through a muddier midpoint the way a
+# plain RGB lerp between a blue and a violet would. Picked independently from
+# the app icon (tools/gen_icon.py) - that's a deliberately soft/pastel glass
+# asset, not meant to double as a high-contrast UI accent.
+def _oklch_to_srgb(L, C, h_deg):
+    import math
+    h = math.radians(h_deg)
+    a, b = C*math.cos(h), C*math.sin(h)
+    l_ = L + 0.3963377774*a + 0.2158037573*b
+    m_ = L - 0.1055613458*a - 0.0638541728*b
+    s_ = L - 0.0894841775*a - 1.2914855480*b
+    l, m, s = l_**3, m_**3, s_**3
+    r_lin =  4.0767416621*l - 3.3077115913*m + 0.2309699292*s
+    g_lin = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s
+    b_lin = -0.0041960863*l - 0.7034186147*m + 1.7076147010*s
+    def enc(c):
+        c = max(0.0, min(1.0, c))
+        return 12.92*c if c <= 0.0031308 else 1.055*(c**(1/2.4)) - 0.055
+    return tuple(round(enc(c)*255) for c in (r_lin,g_lin,b_lin))
+C_AT = QColor(*_oklch_to_srgb(0.70, 0.155, 258))  # vivid blue
+C_AB = QColor(*_oklch_to_srgb(0.70, 0.155, 296))  # vivid violet
 C_TR  = QColor(230,240,255,255)
 
 def _paint_card(painter, w, h):
@@ -840,11 +876,26 @@ def main():
     ms = pmouse.Listener(on_move=_mm, on_click=_mc_guard)
     kb.daemon = ms.daemon = True; kb.start(); ms.start()
     _log("[main] listeners OK")
-    hint = ("Option+Click a word to translate it.\nHold and drag instead to translate a whole sentence."
-            if _IS_MAC else
-            "Ctrl+Middle Click a word to translate it.\nHold and drag instead to translate a whole sentence.")
-    _tray_ref.showMessage("OverLex is running", hint,
-                          QSystemTrayIcon.Information, 4000)
+
+    if _IS_MAC and not _mac_accessibility_trusted():
+        _log("[permissions] Accessibility NOT granted - mouse/keyboard hooks will receive nothing")
+        _tray_ref.showMessage(
+            "OverLex needs Accessibility access",
+            "The tray icon is running, but translation won't respond to clicks until "
+            "you enable it: System Settings → Privacy & Security → Accessibility → "
+            "turn on OverLex (remove and re-add it if it's already listed there).",
+            QSystemTrayIcon.Warning, 10000)
+        import subprocess
+        try:
+            subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
+        except Exception as e:
+            _log(f"[permissions] failed to open System Settings: {e}")
+    else:
+        hint = ("Option+Click a word to translate it.\nHold and drag instead to translate a whole sentence."
+                if _IS_MAC else
+                "Ctrl+Middle Click a word to translate it.\nHold and drag instead to translate a whole sentence.")
+        _tray_ref.showMessage("OverLex is running", hint,
+                              QSystemTrayIcon.Information, 4000)
     sys.exit(app.exec())
 
 if __name__ == "__main__":
