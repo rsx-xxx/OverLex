@@ -359,7 +359,12 @@ def _win_event_filter(msg, data):
     # Swallow the Ctrl+MiddleClick gesture at the OS level so Windows' native
     # middle-click autoscroll (page panning) never engages in the foreground app
     # (e.g. a browser) while the user is triggering an OverLex selection.
+    #
+    # suppress_event() raises immediately to abort this hook call, so on_click
+    # would never fire for a suppressed event - it has to be driven by hand here,
+    # from the raw MSLLHOOKSTRUCT coordinates, before calling it.
     if _ctrl and msg in (WM_MBUTTONDOWN, WM_MBUTTONUP):
+        _mc_guard(data.pt.x, data.pt.y, pmouse.Button.middle, msg == WM_MBUTTONDOWN)
         _ms_listener.suppress_event()
     return True
 
@@ -515,10 +520,11 @@ def _mac_accessibility_trusted():
 # == Icon =====================================================================
 
 def _make_icon(size=64):
-    # Reuses the same squircle+A/Я design tools/gen_icon.py bakes into the
-    # installed .ico/.icns, instead of maintaining a second, drifting QPainter
-    # re-implementation of the same icon.
-    from tools.gen_icon import render as _render_icon
+    # icon_master.png (used for the installed .ico/.icns) is a soft translucent
+    # glass design meant for a large app icon - at systray size it's nearly
+    # invisible against either a light or dark taskbar, so the tray gets its
+    # own bold, opaque rendering instead.
+    from tools.gen_icon import render_tray as _render_icon
     img = _render_icon(size).convert("RGBA")
     buf = io.BytesIO(); img.save(buf, "PNG")
     px = QPixmap(); px.loadFromData(buf.getvalue())
