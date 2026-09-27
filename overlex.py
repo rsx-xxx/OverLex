@@ -272,10 +272,12 @@ _CTRL_KEYS = _keys("ctrl", "ctrl_l", "ctrl_r")
 _ALT_KEYS = _keys("alt", "alt_l", "alt_r", "alt_gr")
 
 DRAG_PX = 6  # move further than this before release -> sentence mode; otherwise -> word mode
+WM_MBUTTONDOWN = 0x0207; WM_MBUTTONUP = 0x0208
 
 _ctrl = False; _alt = False; _last_xy = (0, 0)
 _armed = False; _drag_button = None; _press_xy = (0, 0); _dragging = False
 _mouse_ctl = pmouse.Controller()
+_ms_listener = None
 
 # A generation counter, not a busy-flag: translation now retries and can fall back to
 # a second provider, so a single call can take a few seconds. A boolean "busy" gate
@@ -352,6 +354,14 @@ def _mc(x, y, b, pressed):
         _armed = True; _drag_button = b; _press_xy = (x, y); _dragging = False
     elif (_IS_MAC and b != pmouse.Button.left) or (_IS_WIN and b != pmouse.Button.middle):
         bus.hide_now.emit()
+
+def _win_event_filter(msg, data):
+    # Swallow the Ctrl+MiddleClick gesture at the OS level so Windows' native
+    # middle-click autoscroll (page panning) never engages in the foreground app
+    # (e.g. a browser) while the user is triggering an OverLex selection.
+    if _ctrl and msg in (WM_MBUTTONDOWN, WM_MBUTTONUP):
+        _ms_listener.suppress_event()
+    return True
 
 # == OCR helpers ==============================================================
 
@@ -861,7 +871,7 @@ def _mc_guard(x, y, b, pressed):
     _mc(x, y, b, pressed)
 
 def main():
-    global _tray_ref
+    global _tray_ref, _ms_listener
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv); app.setQuitOnLastWindowClosed(False)
     _tray_ref = Tray(_make_icon(), app)
@@ -873,7 +883,9 @@ def main():
     bus.sel_end.connect(sel.finish)
     bus.sel_cancel.connect(sel.hide)
     kb = pkeyboard.Listener(on_press=_kp, on_release=_kr)
-    ms = pmouse.Listener(on_move=_mm, on_click=_mc_guard)
+    _mouse_kwargs = {"win32_event_filter": _win_event_filter} if _IS_WIN else {}
+    ms = pmouse.Listener(on_move=_mm, on_click=_mc_guard, **_mouse_kwargs)
+    _ms_listener = ms
     kb.daemon = ms.daemon = True; kb.start(); ms.start()
     _log("[main] listeners OK")
 
