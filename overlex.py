@@ -881,8 +881,15 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv); app.setQuitOnLastWindowClosed(False)
     _tray_ref = Tray(_make_icon(), app)
-    ov = Overlay(); bus.show.connect(ov.present); bus.hide_now.connect(ov.hide)
-    blk = BlockOverlay(); bus.show_block.connect(blk.present); bus.hide_now.connect(blk.hide)
+    # These popups sit on top of the exact screen area a later capture may
+    # target (e.g. re-selecting the same/overlapping text) - without this they
+    # aren't excluded from mss's grab like RegionSelector is, so OCR can read
+    # back the popup's OWN (already-translated) rendered text on the next try,
+    # which "translates" to itself and looks like the result never changes.
+    ov = Overlay(); _exclude_from_capture(ov)
+    bus.show.connect(ov.present); bus.hide_now.connect(ov.hide)
+    blk = BlockOverlay(); _exclude_from_capture(blk)
+    bus.show_block.connect(blk.present); bus.hide_now.connect(blk.hide)
     sel = RegionSelector()
     bus.sel_start.connect(sel.begin)
     bus.sel_move.connect(sel.move_to)
