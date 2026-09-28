@@ -291,6 +291,25 @@ def _next_gen():
     _gen += 1
     return _gen
 
+# Defense in depth against re-capturing our own still-visible popup: if the
+# excluded-from-capture window handle ever fails to actually protect a popup
+# (older Windows build, odd DWM/driver state, a handle recreated after the
+# affinity was applied - see _exclude_from_capture), OCR reads back the
+# popup's OWN rendered translation instead of real screen content. That
+# looks exactly like "the result never updates" because "translating" an
+# already-translated string back to itself is close to a no-op. Detecting it
+# doesn't depend on any capture API working correctly: newly-OCR'd SOURCE
+# text matching the LAST shown RESULT text is a strong, cheap signal of self-
+# capture (real source text coincidentally matching a prior translation is
+# vanishingly unlikely), so treat a match as a bad frame and drop it instead
+# of displaying a misleadingly "successful" stale result.
+_last_result_text = None
+
+def _looks_like_self_capture(source_text: str) -> bool:
+    global _last_result_text
+    t = source_text.strip().lower()
+    return bool(t) and _last_result_text is not None and t == _last_result_text.strip().lower()
+
 def _start_at(x, y):
     gen = _next_gen()
     threading.Thread(target=_run, args=(x, y, gen), daemon=True).start()
@@ -418,6 +437,7 @@ def _group_text(rows):
 # == Pipeline =================================================================
 
 def _run(x, y, gen):
+    global _last_result_text
     try:
         lft,top = max(0,x-CAPTURE_W//2), max(0,y-CAPTURE_H//2)
         with mss.MSS() as sct:
@@ -442,16 +462,21 @@ def _run(x, y, gen):
         if best_d > 300 or not found: bus.hide_now.emit(); return
         clean = re.sub(r"[^\w'\-]","",found).strip()
         if not clean or len(clean) < 2: bus.hide_now.emit(); return
+        if _looks_like_self_capture(clean):
+            _log(f"[run] {clean!r} matches last shown result - likely re-captured our own popup, dropping")
+            bus.hide_now.emit(); return
 
         result = _tr(clean)
         if gen != _gen: return  # superseded while translating
         _log(f"[run] {clean!r} -> {result!r}")
+        _last_result_text = result
         bus.show.emit(x, y, result)
     except Exception as e:
         _log(f"[run] {e}"); import traceback; _log(traceback.format_exc())
         if gen == _gen: bus.hide_now.emit()
 
 def _run_region(l, t, w, h, gen):
+    global _last_result_text
     try:
         _log(f"[region] gen={gen} capture rect=({l},{t},{w},{h})")
         # The selection overlay sits directly on top of this exact area and
@@ -478,10 +503,16 @@ def _run_region(l, t, w, h, gen):
             bus.hide_now.emit(); return
 
         flat = re.sub(r"\s*\n\s*", " ", text).strip()
+        if _looks_like_self_capture(flat):
+            _log(f"[region] gen={gen} {flat!r} matches last shown result - "
+                 f"likely re-captured our own popup, dropping")
+            bus.hide_now.emit(); return
+
         result = _tr(flat)
         if gen != _gen:
             _log(f"[region] gen={gen} superseded by gen={_gen} after translate"); return
         _log(f"[region] gen={gen} {flat!r} -> {result!r}")
+        _last_result_text = result
         bus.show_block.emit(l + w//2, t + h, result)
     except Exception as e:
         _log(f"[region] gen={gen} {e}"); import traceback; _log(traceback.format_exc())
@@ -610,6 +641,7 @@ class Overlay(QWidget):
         self._timer = QTimer(self); self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
         self._text = ""; self._font = QFont("Segoe UI",20,QFont.Bold)
+        self._excluded = False
 
     def present(self, sx, sy, word):
         _log(f"[overlay] present() applying word={word!r}")
@@ -630,6 +662,12 @@ class Overlay(QWidget):
         # window is made visible again, so a stale frame can't flash.
         self.repaint()
         self.show(); self.raise_()
+        # Applied post-show, on the same, now-final native window handle a
+        # RegionSelector protects itself with - applying it pre-show risks
+        # Qt swapping in a different underlying HWND on first show(), which
+        # would silently drop the affinity set on the earlier, throwaway one.
+        if not self._excluded:
+            _exclude_from_capture(self); self._excluded = True
         try: _grab_focus(int(self.winId()))
         except: pass
         self.update(); self._timer.start(HIDE_MS)
@@ -665,6 +703,7 @@ class BlockOverlay(QWidget):
         self._label.setFont(QFont(fname, 15, QFont.Bold))
         self._label.setStyleSheet("color: rgb(230,240,255); background: transparent;")
         self._label.setAlignment(Qt.AlignLeft|Qt.AlignTop)
+        self._excluded = False
 
     def present(self, sx, sy, text):
         _log(f"[block] present() applying text={text!r}")
@@ -684,6 +723,10 @@ class BlockOverlay(QWidget):
         # briefly present the OLD frame's pixels on the first shown frame.
         self._label.repaint(); self.repaint()
         self.show(); self.raise_()
+        # See Overlay.present() for why this is applied post-show rather than
+        # once at construction time.
+        if not self._excluded:
+            _exclude_from_capture(self); self._excluded = True
         try: _grab_focus(int(self.winId()))
         except: pass
         self.update(); self._timer.start(HIDE_MS)
@@ -707,7 +750,10 @@ def _exclude_from_capture(widget):
     if _IS_WIN:
         import ctypes
         try:
-            ctypes.windll.user32.SetWindowDisplayAffinity(int(widget.winId()), 0x11)
+            ok = ctypes.windll.user32.SetWindowDisplayAffinity(int(widget.winId()), 0x11)
+            if not ok:
+                _log(f"[capture] SetWindowDisplayAffinity({widget.__class__.__name__}) "
+                     f"returned failure - this window is NOT protected from capture")
         except Exception as e:
             _log(f"[capture] SetWindowDisplayAffinity failed: {e}")
 
@@ -881,15 +927,14 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv); app.setQuitOnLastWindowClosed(False)
     _tray_ref = Tray(_make_icon(), app)
-    # These popups sit on top of the exact screen area a later capture may
-    # target (e.g. re-selecting the same/overlapping text) - without this they
-    # aren't excluded from mss's grab like RegionSelector is, so OCR can read
-    # back the popup's OWN (already-translated) rendered text on the next try,
-    # which "translates" to itself and looks like the result never changes.
-    ov = Overlay(); _exclude_from_capture(ov)
-    bus.show.connect(ov.present); bus.hide_now.connect(ov.hide)
-    blk = BlockOverlay(); _exclude_from_capture(blk)
-    bus.show_block.connect(blk.present); bus.hide_now.connect(blk.hide)
+    # Overlay/BlockOverlay now self-exclude from screen capture the first time
+    # they're shown (see their present() methods) - these popups sit on top of
+    # the exact screen area a later capture may target (e.g. re-selecting the
+    # same/overlapping text), and without that, OCR could read back a popup's
+    # OWN (already-translated) rendered text on the next try, which
+    # "translates" to itself and looks like the result never changes.
+    ov = Overlay(); bus.show.connect(ov.present); bus.hide_now.connect(ov.hide)
+    blk = BlockOverlay(); bus.show_block.connect(blk.present); bus.hide_now.connect(blk.hide)
     sel = RegionSelector()
     bus.sel_start.connect(sel.begin)
     bus.sel_move.connect(sel.move_to)
